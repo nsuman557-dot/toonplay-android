@@ -1,0 +1,86 @@
+<resources>
+    <string name="app_name">ToonPlay</string>
+    <string name="brand_prefix">Toon</string>
+    <string name="brand_suffix">Play</string>
+
+    <!-- Navigation & Categories -->
+    <string name="nav_home">Home</string>
+    <string name="nav_anime">Anime</string>
+    <string name="nav_cartoon">Cartoon</string>
+    <string name="nav_latest">Latest</string>
+    <string name="nav_childhood">Childhood</string>
+    <string name="nav_series">Series</string>
+    <string name="nav_movies">Movie</string>
+    <string name="nav_profile">Profile</string>
+    <string name="nav_favorites">Watchlist</string>
+
+    <!-- Sections matching ToonPlay.in order -->
+    <string name="section_latest_combined">Latest Episodes &amp; Releases</string>
+    <string name="section_latest_combined_sub">Fresh Releases</string>
+    <string name="lang_jap_eng">JAP/ENG</string>
+    <string name="lang_hin_tam_tel">HIN/TAM/TEL</string>
+
+    <string name="section_childhood_shows">Childhood Shows</string>
+    <string name="section_childhood_shows_sub">Nostalgic Classics</string>
+
+    <string name="section_popular_series">Popular Series</string>
+    <string name="section_popular_series_sub">Top Rated Shows</string>
+
+    <string name="section_popular_movies">Top Movies</string>
+    <string name="section_popular_movies_sub">Feature Films</string>
+
+    <string name="section_anime_library">Anime Library</string>
+    <string name="section_cartoon_library">Cartoons &amp; Classics</string>
+
+    <string name="profile_title">My Profile &amp; Watchlist</string>
+    <string name="profile_audio_preference">Default Latest Audio</string>
+    <string name="profile_explore_home">Explore Home</string>
+
+    <string name="section_saved">My Watchlist</string>
+    <string name="section_saved_sub">Saved titles on this device</string>
+
+    <!-- Actions & Controls -->
+    <string name="action_see_all">See All</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_refresh">Refresh Feed</string>
+    <string name="action_watch">Watch</string>
+    <string name="action_explore">Explore Title</string>
+    <string name="action_save">Watchlist</string>
+    <string name="action_saved">Saved</string>
+    <string name="action_share">Share</string>
+    <string name="action_close">Close</string>
+    <string name="action_back">Back</string>
+    <string name="action_clear">Clear</string>
+    <string name="search_placeholder">Search anime, cartoons, movies…</string>
+
+    <!-- Device Modes -->
+    <string name="device_mode_title">Device Layout Mode</string>
+    <string name="device_mode_auto">Auto Detect</string>
+    <string name="device_mode_mobile">Mobile</string>
+    <string name="device_mode_tablet">Tablet</string>
+    <string name="device_mode_big_tablet">Big Tablet</string>
+    <string name="device_mode_desktop">Desktop / Windows</string>
+    <string name="device_mode_tv">Android TV</string>
+
+    <!-- States -->
+    <string name="loading_feed">Loading ToonPlay library…</string>
+    <string name="error_feed_title">Unable to reach ToonPlay feed</string>
+    <string name="error_feed_fallback">Check your internet connection and tap Retry.</string>
+    <string name="empty_search_title">No matching titles</string>
+    <string name="empty_search_sub">Try searching a different title or clear filters.</string>
+    <string name="empty_saved_title">Your watchlist is empty</string>
+    <string name="empty_saved_sub">Tap the bookmark icon on any show or movie to save it here.</string>
+    <string name="related_titles">More on ToonPlay</string>
+    <string name="overview_heading">Overview</string>
+    <string name="no_overview">No synopsis provided in the live feed for this title.</string>
+
+    <!-- Accessibility -->
+    <string name="cd_search">Search ToonPlay</string>
+    <string name="cd_layout_mode">Switch device layout mode</string>
+    <string name="cd_refresh">Refresh home feed</string>
+    <string name="cd_back">Navigate back</string>
+    <string name="cd_favorite">Toggle watchlist</string>
+    <string name="cd_share">Share title</string>
+    <string name="cd_scroll_left">Scroll left</string>
+    <string name="cd_scroll_right">Scroll right</string>
+</resources>

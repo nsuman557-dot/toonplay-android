@@ -1,0 +1,6 @@
+{
+  "name": "ToonPlay",
+  "description": "Modern multi-device anime and cartoon discovery app with ToonPlay dark indigo theme and separate responsive UIs for mobile, tablet, big tablet, desktop, and Android TV.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
