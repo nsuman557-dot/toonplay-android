@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,8 +37,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,12 +99,18 @@ fun calculateCompleteGridColumns(
     return columns.coerceAtLeast(minColumns)
 }
 
+val LocalIsReducedMotion = staticCompositionLocalOf { false }
+
+val LocalLiveDotAlpha = staticCompositionLocalOf<State<Float>> { mutableFloatStateOf(1f) }
+
+val LocalHeroAutoScrollEnabled = staticCompositionLocalOf<State<Boolean>> { mutableStateOf(true) }
+
 /**
- * Checks Android's system reduced-motion setting (`ANIMATOR_DURATION_SCALE == 0f`) safely.
+ * Queries Android's system reduced-motion setting (`ANIMATOR_DURATION_SCALE == 0f`) once at root.
  */
 @Composable
-fun rememberIsReducedMotion(): Boolean {
-    val context = LocalContext.current
+fun rememberSystemReducedMotion(): Boolean {
+    val context = LocalContext.current.applicationContext
     return remember(context) {
         runCatching {
             Settings.Global.getFloat(
@@ -110,6 +121,12 @@ fun rememberIsReducedMotion(): Boolean {
         }.getOrDefault(false)
     }
 }
+
+/**
+ * Returns the cached system reduced-motion preference without performing Binder IPC on scroll.
+ */
+@Composable
+fun rememberIsReducedMotion(): Boolean = LocalIsReducedMotion.current
 
 /**
  * Provides smooth spring-based focus scrolling for D-pad, remote, and keyboard navigation while
@@ -482,6 +499,72 @@ fun <T> ResponsiveSectionGrid(
                         Spacer(modifier = Modifier.weight(1f))
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Emits inline grid rows lazily into an outer [LazyColumn] so each row is composed and recycled
+ * on demand as the user scrolls vertically instead of composing all rows in a single frame.
+ */
+fun <T> LazyListScope.inlinePosterGridRows(
+    sectionKey: String,
+    items: List<T>,
+    columns: Int,
+    cardWidth: Dp,
+    itemSpacing: Dp,
+    horizontalPadding: Dp,
+    firstRowTopPadding: Dp,
+    rowKeyPrefix: (T) -> String,
+    itemContent: @Composable (index: Int, item: T, cellModifier: Modifier) -> Unit,
+) {
+    val safeColumns = columns.coerceAtLeast(1)
+    val rowCount = (items.size + safeColumns - 1) / safeColumns
+    items(
+        count = rowCount,
+        key = { rowIdx ->
+            val start = rowIdx * safeColumns
+            val end = minOf(start + safeColumns, items.size)
+            val rowIds =
+                buildString {
+                    for (i in start until end) {
+                        if (i > start) append('_')
+                        append(rowKeyPrefix(items[i]))
+                    }
+                }
+            "${sectionKey}_grid_r${safeColumns}_${rowIdx}_$rowIds"
+        },
+        contentType = { "inline_grid_row" },
+    ) { rowIdx ->
+        val start = rowIdx * safeColumns
+        val end = minOf(start + safeColumns, items.size)
+        val topPad = if (rowIdx == 0) firstRowTopPadding else itemSpacing
+        Row(
+            modifier =
+                Modifier.fillMaxWidth()
+                    .padding(start = horizontalPadding, end = horizontalPadding, top = topPad),
+            horizontalArrangement = Arrangement.spacedBy(itemSpacing),
+        ) {
+            for (idx in start until end) {
+                val item = items[idx]
+                if (safeColumns == 1) {
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        itemContent(
+                            idx,
+                            item,
+                            Modifier.widthIn(max = cardWidth * 1.35f).fillMaxWidth(),
+                        )
+                    }
+                } else {
+                    itemContent(idx, item, Modifier.weight(1f))
+                }
+            }
+            repeat(safeColumns - (end - start)) {
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
     }

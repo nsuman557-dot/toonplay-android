@@ -14,6 +14,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -50,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,28 +77,32 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.app.toonplay.R
 import com.app.toonplay.data.model.AnimeItem
 import com.app.toonplay.data.model.AnimeSectionTab
+import com.app.toonplay.data.model.DeviceFormFactor
 import com.app.toonplay.data.model.HomeFeed
 import com.app.toonplay.data.model.LatestLanguageFilter
 import com.app.toonplay.ui.components.AnimePosterGrid
 import com.app.toonplay.ui.components.BlinkingGreenDot
 import com.app.toonplay.ui.components.CarouselDotIndicator
 import com.app.toonplay.ui.components.FannedHeroCarousel
-import com.app.toonplay.ui.components.FullScreenSearchSheet
+import com.app.toonplay.ui.components.LanguageCardsRail
 import com.app.toonplay.ui.components.MetadataPill
 import com.app.toonplay.ui.components.ProvideSmoothBringIntoView
-import com.app.toonplay.ui.components.ResponsiveSectionGrid
 import com.app.toonplay.ui.components.StarRatingPill
 import com.app.toonplay.ui.components.ToonPlayNavItems
 import com.app.toonplay.ui.components.ToonPlayProfileView
 import com.app.toonplay.ui.components.ToonPlayWordmark
+import com.app.toonplay.ui.components.calculateCompleteGridColumns
+import com.app.toonplay.ui.components.inlinePosterGridRows
 import com.app.toonplay.ui.components.rememberIsReducedMotion
 import com.app.toonplay.ui.components.smoothMouseWheelScroll
-import com.app.toonplay.ui.state.HomeScreenUiState
+import com.app.toonplay.ui.state.HomeFeedControlsState
 import com.app.toonplay.ui.theme.BorderBright
 import com.app.toonplay.ui.theme.BorderSubtle
 import com.app.toonplay.ui.theme.EmeraldLive
@@ -109,13 +116,16 @@ import com.app.toonplay.ui.theme.TextOffWhite
 import com.app.toonplay.ui.theme.TextPrimary
 import com.app.toonplay.ui.theme.TextSecondary
 import com.app.toonplay.ui.theme.ToonVioletPrimary
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @Composable
 fun TvHomeScreen(
   feed: HomeFeed,
-  uiState: HomeScreenUiState,
+  controls: HomeFeedControlsState,
+  focusedPreviewFlow: StateFlow<AnimeItem?>,
+  initialHeroIndex: Int,
   onSelectTab: (AnimeSectionTab) -> Unit,
   onSelectLanguageFilter: (LatestLanguageFilter) -> Unit,
   onToggleSectionGrid: (AnimeSectionTab, Boolean) -> Unit,
@@ -124,14 +134,13 @@ fun TvHomeScreen(
   onItemClick: (AnimeItem) -> Unit,
   onToggleSave: (AnimeItem) -> Unit,
   onToggleSearch: (Boolean) -> Unit,
-  onSearchQueryChange: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val heroItems = feed.hero
   val heroCount = heroItems.size.coerceAtLeast(1)
   val virtualCount = if (heroItems.size > 1) heroCount * 400 else heroCount
   val initialPage =
-    if (heroItems.size > 1) heroCount * 200 + (uiState.activeHeroIndex % heroCount) else 0
+    if (heroItems.size > 1) heroCount * 200 + (initialHeroIndex % heroCount) else 0
 
   val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { virtualCount })
   LaunchedEffect(pagerState, heroCount) {
@@ -144,8 +153,8 @@ fun TvHomeScreen(
   }
 
   val latestList =
-    remember(feed, uiState.latestLanguageFilter) {
-      when (uiState.latestLanguageFilter) {
+    remember(feed, controls.latestLanguageFilter) {
+      when (controls.latestLanguageFilter) {
         LatestLanguageFilter.JAP_ENG -> feed.globalLatest
         LatestLanguageFilter.HIN_TAM_TEL -> feed.latestReleases
       }
@@ -156,9 +165,8 @@ fun TvHomeScreen(
   val homepageSeries = remember(feed.popularSeries) { feed.popularSeries.take(12) }
   val homepageMovies = remember(feed.popularMovies) { feed.popularMovies.take(12) }
 
-  val spotlightItem =
-    uiState.focusedPreviewItem ?: heroItems.firstOrNull() ?: latestList.firstOrNull()
   val homeListState = rememberLazyListState()
+  val languageRowState = rememberLazyListState()
   val latestRowState = rememberLazyListState()
   val childhoodRowState = rememberLazyListState()
   val seriesRowState = rememberLazyListState()
@@ -193,10 +201,10 @@ fun TvHomeScreen(
             TvSideRailIcon(
               iconRes = navItem.iconRes,
               label = label,
-              selected = uiState.selectedTab == navItem.tab,
+              selected = controls.selectedTab == navItem.tab,
               isReducedMotion = isReducedMotion,
               onClick = {
-                if (navItem.tab == AnimeSectionTab.HOME && uiState.selectedTab == AnimeSectionTab.HOME) {
+                if (navItem.tab == AnimeSectionTab.HOME && controls.selectedTab == AnimeSectionTab.HOME) {
                   coroutineScope.launch {
                     if (isReducedMotion) {
                       homeListState.scrollToItem(0)
@@ -231,9 +239,9 @@ fun TvHomeScreen(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           ToonPlayWordmark(height = 30.dp)
-          if (uiState.selectedTab != AnimeSectionTab.HOME) {
+          if (controls.selectedTab != AnimeSectionTab.HOME) {
             Text(
-              text = uiState.selectedTab.label,
+              text = controls.selectedTab.label,
               style = MaterialTheme.typography.headlineSmall,
               color = TextOffWhite,
             )
@@ -242,116 +250,205 @@ fun TvHomeScreen(
 
         ProvideSmoothBringIntoView(edgeMargin = 42.dp, isReducedMotion = isReducedMotion) {
           Crossfade(
-            targetState = uiState.selectedTab,
+            targetState = controls.selectedTab,
             animationSpec = tween(durationMillis = if (isReducedMotion) 0 else 150),
             label = "tv_tab_crossfade",
           ) { tab ->
             if (tab == AnimeSectionTab.HOME) {
-              LazyColumn(
-                state = homeListState,
-                modifier =
-                  Modifier.fillMaxSize()
-                    .smoothMouseWheelScroll(homeListState, Orientation.Vertical, isReducedMotion),
-                contentPadding = PaddingValues(top = 14.dp, bottom = 40.dp),
-                verticalArrangement = Arrangement.spacedBy(28.dp),
-              ) {
-                // 1. Bidirectional TV Hero Showcase (no arrow buttons)
-                if (heroItems.isNotEmpty() && spotlightItem != null) {
-                  item(key = "tv_spotlight_banner", contentType = "tv_hero") {
-                    TvHeroSpotlightShowcase(
-                      spotlight = spotlightItem,
-                      heroItems = heroItems,
-                      pagerState = pagerState,
-                      isReducedMotion = isReducedMotion,
-                      onExplore = onItemClick,
-                      onFocusItem = onFocusItem,
-                    )
+              BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val contentWidth = (this.maxWidth - 84.dp).coerceAtLeast(0.dp)
+                val tvGridColumns =
+                  remember(contentWidth) {
+                    calculateCompleteGridColumns(contentWidth, 176.dp, 18.dp, minColumns = 1)
                   }
-                }
+                LazyColumn(
+                  state = homeListState,
+                  modifier =
+                    Modifier.fillMaxSize()
+                      .smoothMouseWheelScroll(homeListState, Orientation.Vertical, isReducedMotion),
+                  contentPadding = PaddingValues(top = 14.dp, bottom = 40.dp),
+                  verticalArrangement = Arrangement.Top,
+                ) {
+                  // 1. Bidirectional TV Hero Showcase (no arrow buttons)
+                  if (heroItems.isNotEmpty()) {
+                    item(key = "tv_spotlight_banner", contentType = "tv_hero") {
+                      TvHeroSpotlightSlot(
+                        focusedPreviewFlow = focusedPreviewFlow,
+                        heroItems = heroItems,
+                        fallbackItem = heroItems.first(),
+                        pagerState = pagerState,
+                        isReducedMotion = isReducedMotion,
+                        onExplore = onItemClick,
+                        onFocusItem = onFocusItem,
+                      )
+                    }
+                  }
 
-                // 2. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items)
-                if (homepageLatest.isNotEmpty()) {
-                  item(key = "tv_latest_rail", contentType = "tv_rail") {
-                    val isGrid = AnimeSectionTab.LATEST in uiState.gridModeTabs
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                      Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 42.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                      ) {
-                        Column {
-                          Text(
-                            text = "${stringResource(R.string.section_latest_combined_sub)}  •  ${homepageLatest.size} titles",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = TextSecondary,
-                          )
-                          Text(
-                            text = stringResource(R.string.section_latest_combined),
-                            style = MaterialTheme.typography.headlineSmall.copy(fontSize = 23.sp),
-                            color = TextPrimary,
-                          )
-                        }
+                  // 2. Explore by Language (9 sliding 2:1 banner cards)
+                  item(key = "tv_language_cards", contentType = "tv_language_rail") {
+                    val latestItemIndex = if (heroItems.isNotEmpty()) 2 else 1
+                    Box(modifier = Modifier.padding(top = if (heroItems.isNotEmpty()) 28.dp else 0.dp)) {
+                      LanguageCardsRail(
+                        formFactor = DeviceFormFactor.TV,
+                        listState = languageRowState,
+                        horizontalPadding = 42.dp,
+                        itemSpacing = 10.dp,
+                        sectionSpacing = 14.dp,
+                        isTvMode = true,
+                        isReducedMotion = isReducedMotion,
+                        testTagPrefix = "tv_languages",
+                        onCardClick = { card ->
+                          onSelectLanguageFilter(card.latestFilter)
+                          coroutineScope.launch {
+                            if (isReducedMotion) {
+                              homeListState.scrollToItem(latestItemIndex)
+                            } else {
+                              homeListState.animateScrollToItem(latestItemIndex)
+                            }
+                          }
+                        },
+                      )
+                    }
+                  }
+
+                  // 3. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items)
+                  if (homepageLatest.isNotEmpty()) {
+                    val isGrid = AnimeSectionTab.LATEST in controls.gridModeTabs
+                    if (isGrid) {
+                      item(key = "tv_latest_header", contentType = "tv_section_header") {
                         Row(
-                          horizontalArrangement = Arrangement.spacedBy(10.dp),
+                          modifier =
+                            Modifier.fillMaxWidth()
+                              .padding(start = 42.dp, end = 42.dp, top = 28.dp),
+                          horizontalArrangement = Arrangement.SpaceBetween,
                           verticalAlignment = Alignment.CenterVertically,
                         ) {
-                          LatestLanguageFilter.entries.forEach { filter ->
-                            TvFocusableChip(
-                              label = filter.label,
-                              selected = filter == uiState.latestLanguageFilter,
-                              isReducedMotion = isReducedMotion,
-                              onClick = { onSelectLanguageFilter(filter) },
-                              testTag = "tv_lang_${filter.name.lowercase()}",
+                          Column {
+                            Text(
+                              text =
+                                "${stringResource(R.string.section_latest_combined_sub)}  •  ${homepageLatest.size} titles",
+                              style = MaterialTheme.typography.labelLarge,
+                              color = TextSecondary,
+                            )
+                            Text(
+                              text = stringResource(R.string.section_latest_combined),
+                              style = MaterialTheme.typography.headlineSmall.copy(fontSize = 23.sp),
+                              color = TextPrimary,
                             )
                           }
-                          TvViewModeTogglePill(
-                            isGridMode = isGrid,
-                            onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
-                          )
-                          TvSeeAllChip(
-                            isReducedMotion = isReducedMotion,
-                            onClick = { onSelectTab(AnimeSectionTab.LATEST) },
-                            testTag = "tv_see_all_latest",
-                          )
+                          Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                          ) {
+                            TvLanguageTogglePill(
+                              selectedFilter = controls.latestLanguageFilter,
+                              onSelectFilter = onSelectLanguageFilter,
+                            )
+                            TvViewModeTogglePill(
+                              isGridMode = true,
+                              onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
+                            )
+                            TvSeeAllChip(
+                              isReducedMotion = isReducedMotion,
+                              onClick = { onSelectTab(AnimeSectionTab.LATEST) },
+                              testTag = "tv_see_all_latest",
+                            )
+                          }
                         }
                       }
-                      if (isGrid) {
-                        TvSectionInlineGrid(
-                          items = homepageLatest,
-                          savedIds = uiState.savedIds,
-                          showRank = false,
+                      inlinePosterGridRows(
+                        sectionKey = "tv_latest",
+                        items = homepageLatest,
+                        columns = tvGridColumns,
+                        cardWidth = 176.dp,
+                        itemSpacing = 18.dp,
+                        horizontalPadding = 42.dp,
+                        firstRowTopPadding = 14.dp,
+                        rowKeyPrefix = { it.uid },
+                      ) { _, item, cellModifier ->
+                        TvFocusablePosterCard(
+                          item = item,
+                          rank = null,
+                          isSaved = item.id in controls.savedIds,
+                          onFocus = { onFocusItem(item) },
+                          onClick = { onItemClick(item) },
+                          onToggleSave = { onToggleSave(item) },
+                          modifier = cellModifier,
+                          cardWidth = null,
                           isReducedMotion = isReducedMotion,
-                          onFocusItem = onFocusItem,
-                          onItemClick = onItemClick,
-                          onToggleSave = onToggleSave,
                         )
-                      } else {
-                        TvPosterLazyRow(
-                          items = homepageLatest,
-                          savedIds = uiState.savedIds,
-                          showRank = false,
-                          listState = latestRowState,
-                          isReducedMotion = isReducedMotion,
-                          onFocusItem = onFocusItem,
-                          onItemClick = onItemClick,
-                          onToggleSave = onToggleSave,
-                        )
+                      }
+                    } else {
+                      item(key = "tv_latest_rail", contentType = "tv_rail") {
+                        Column(
+                          modifier = Modifier.padding(top = 28.dp),
+                          verticalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                          Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 42.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                          ) {
+                            Column {
+                              Text(
+                                text =
+                                  "${stringResource(R.string.section_latest_combined_sub)}  •  ${homepageLatest.size} titles",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = TextSecondary,
+                              )
+                              Text(
+                                text = stringResource(R.string.section_latest_combined),
+                                style = MaterialTheme.typography.headlineSmall.copy(fontSize = 23.sp),
+                                color = TextPrimary,
+                              )
+                            }
+                            Row(
+                              horizontalArrangement = Arrangement.spacedBy(10.dp),
+                              verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                              TvLanguageTogglePill(
+                                selectedFilter = controls.latestLanguageFilter,
+                                onSelectFilter = onSelectLanguageFilter,
+                              )
+                              TvViewModeTogglePill(
+                                isGridMode = false,
+                                onToggleGridMode = {
+                                  onToggleSectionGrid(AnimeSectionTab.LATEST, it)
+                                },
+                              )
+                              TvSeeAllChip(
+                                isReducedMotion = isReducedMotion,
+                                onClick = { onSelectTab(AnimeSectionTab.LATEST) },
+                                testTag = "tv_see_all_latest",
+                              )
+                            }
+                          }
+                          TvPosterLazyRow(
+                            items = homepageLatest,
+                            savedIds = controls.savedIds,
+                            showRank = false,
+                            listState = latestRowState,
+                            isReducedMotion = isReducedMotion,
+                            onFocusItem = onFocusItem,
+                            onItemClick = onItemClick,
+                            onToggleSave = onToggleSave,
+                          )
+                        }
                       }
                     }
                   }
-                }
 
-                // 3. Childhood Shows (max 12 items)
-                if (homepageChildhood.isNotEmpty()) {
-                  item(key = "tv_childhood_rail", contentType = "tv_rail") {
-                    val isGrid = AnimeSectionTab.CHILDHOOD in uiState.gridModeTabs
-                    TvSectionRail(
-                      title = stringResource(R.string.section_childhood_shows),
-                      kicker = "${stringResource(R.string.section_childhood_shows_sub)}  •  ${homepageChildhood.size} titles",
+                  // 4. Childhood Shows (max 12 items)
+                  if (homepageChildhood.isNotEmpty()) {
+                    tvHomeSection(
+                      sectionKey = "tv_childhood",
+                      titleRes = R.string.section_childhood_shows,
+                      kickerRes = R.string.section_childhood_shows_sub,
                       items = homepageChildhood,
-                      savedIds = uiState.savedIds,
+                      savedIds = controls.savedIds,
                       showRank = true,
-                      isGridMode = isGrid,
+                      isGridMode = AnimeSectionTab.CHILDHOOD in controls.gridModeTabs,
+                      tvGridColumns = tvGridColumns,
                       listState = childhoodRowState,
                       isReducedMotion = isReducedMotion,
                       onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
@@ -361,19 +458,18 @@ fun TvHomeScreen(
                       onToggleSave = onToggleSave,
                     )
                   }
-                }
 
-                // 4. Most Popular TV Series (max 12 items)
-                if (homepageSeries.isNotEmpty()) {
-                  item(key = "tv_series_rail", contentType = "tv_rail") {
-                    val isGrid = AnimeSectionTab.SERIES in uiState.gridModeTabs
-                    TvSectionRail(
-                      title = stringResource(R.string.section_popular_series),
-                      kicker = "${stringResource(R.string.section_popular_series_sub)}  •  ${homepageSeries.size} titles",
+                  // 5. Most Popular TV Series (max 12 items)
+                  if (homepageSeries.isNotEmpty()) {
+                    tvHomeSection(
+                      sectionKey = "tv_series",
+                      titleRes = R.string.section_popular_series,
+                      kickerRes = R.string.section_popular_series_sub,
                       items = homepageSeries,
-                      savedIds = uiState.savedIds,
+                      savedIds = controls.savedIds,
                       showRank = false,
-                      isGridMode = isGrid,
+                      isGridMode = AnimeSectionTab.SERIES in controls.gridModeTabs,
+                      tvGridColumns = tvGridColumns,
                       listState = seriesRowState,
                       isReducedMotion = isReducedMotion,
                       onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.SERIES, it) },
@@ -383,19 +479,18 @@ fun TvHomeScreen(
                       onToggleSave = onToggleSave,
                     )
                   }
-                }
 
-                // 5. Blockbuster Anime Movies (max 12 items)
-                if (homepageMovies.isNotEmpty()) {
-                  item(key = "tv_movies_rail", contentType = "tv_rail") {
-                    val isGrid = AnimeSectionTab.MOVIES in uiState.gridModeTabs
-                    TvSectionRail(
-                      title = stringResource(R.string.section_popular_movies),
-                      kicker = "${stringResource(R.string.section_popular_movies_sub)}  •  ${homepageMovies.size} titles",
+                  // 6. Blockbuster Anime Movies (max 12 items)
+                  if (homepageMovies.isNotEmpty()) {
+                    tvHomeSection(
+                      sectionKey = "tv_movies",
+                      titleRes = R.string.section_popular_movies,
+                      kickerRes = R.string.section_popular_movies_sub,
                       items = homepageMovies,
-                      savedIds = uiState.savedIds,
+                      savedIds = controls.savedIds,
                       showRank = false,
-                      isGridMode = isGrid,
+                      isGridMode = AnimeSectionTab.MOVIES in controls.gridModeTabs,
+                      tvGridColumns = tvGridColumns,
                       listState = moviesRowState,
                       isReducedMotion = isReducedMotion,
                       onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.MOVIES, it) },
@@ -410,9 +505,9 @@ fun TvHomeScreen(
             } else if (tab == AnimeSectionTab.PROFILE) {
               ToonPlayProfileView(
                 feed = feed,
-                savedItems = uiState.savedItems,
-                savedIds = uiState.savedIds,
-                selectedLanguageFilter = uiState.latestLanguageFilter,
+                savedItems = controls.savedItems,
+                savedIds = controls.savedIds,
+                selectedLanguageFilter = controls.latestLanguageFilter,
                 onSelectLanguageFilter = onSelectLanguageFilter,
                 onItemClick = onItemClick,
                 onToggleSave = onToggleSave,
@@ -430,14 +525,14 @@ fun TvHomeScreen(
                   AnimeSectionTab.CHILDHOOD -> feed.childhoodShows
                   AnimeSectionTab.SERIES -> feed.popularSeries
                   AnimeSectionTab.MOVIES -> feed.popularMovies
-                  AnimeSectionTab.SAVED -> uiState.savedItems
+                  AnimeSectionTab.SAVED -> controls.savedItems
                   AnimeSectionTab.HOME,
                   AnimeSectionTab.PROFILE -> emptyList()
                 }
               Box(modifier = Modifier.fillMaxSize()) {
                 AnimePosterGrid(
                   items = items,
-                  savedIds = uiState.savedIds,
+                  savedIds = controls.savedIds,
                   onItemClick = onItemClick,
                   onToggleSave = onToggleSave,
                   minCellWidth = 176.dp,
@@ -452,17 +547,103 @@ fun TvHomeScreen(
         }
       }
     }
+  }
+}
 
-    if (uiState.isSearchActive) {
-      FullScreenSearchSheet(
-        query = uiState.searchQuery,
-        results = uiState.searchResults,
-        allItems = feed.allUnique,
-        savedIds = uiState.savedIds,
-        onQueryChange = onSearchQueryChange,
+@Composable
+private fun TvHeroSpotlightSlot(
+  focusedPreviewFlow: StateFlow<AnimeItem?>,
+  heroItems: List<AnimeItem>,
+  fallbackItem: AnimeItem,
+  pagerState: androidx.compose.foundation.pager.PagerState,
+  isReducedMotion: Boolean,
+  onExplore: (AnimeItem) -> Unit,
+  onFocusItem: (AnimeItem) -> Unit,
+) {
+  val focusedPreview by focusedPreviewFlow.collectAsStateWithLifecycle()
+  val spotlight = focusedPreview ?: heroItems.firstOrNull() ?: fallbackItem
+  TvHeroSpotlightShowcase(
+    spotlight = spotlight,
+    heroItems = heroItems,
+    pagerState = pagerState,
+    isReducedMotion = isReducedMotion,
+    onExplore = onExplore,
+    onFocusItem = onFocusItem,
+  )
+}
+
+private fun LazyListScope.tvHomeSection(
+  sectionKey: String,
+  titleRes: Int,
+  kickerRes: Int,
+  items: List<AnimeItem>,
+  savedIds: Set<String>,
+  showRank: Boolean,
+  isGridMode: Boolean,
+  tvGridColumns: Int,
+  listState: LazyListState,
+  isReducedMotion: Boolean,
+  onToggleGridMode: (Boolean) -> Unit,
+  onSeeAll: () -> Unit,
+  onFocusItem: (AnimeItem) -> Unit,
+  onItemClick: (AnimeItem) -> Unit,
+  onToggleSave: (AnimeItem) -> Unit,
+) {
+  if (isGridMode) {
+    item(key = "${sectionKey}_header", contentType = "tv_section_header") {
+      val title = stringResource(titleRes)
+      val kicker = "${stringResource(kickerRes)}  •  ${items.size} titles"
+      TvSectionHeader(
+        title = title,
+        kicker = kicker,
+        isGridMode = true,
+        isReducedMotion = isReducedMotion,
+        onToggleGridMode = onToggleGridMode,
+        onSeeAll = onSeeAll,
+        modifier = Modifier.padding(top = 28.dp),
+      )
+    }
+    inlinePosterGridRows(
+      sectionKey = sectionKey,
+      items = items,
+      columns = tvGridColumns,
+      cardWidth = 176.dp,
+      itemSpacing = 18.dp,
+      horizontalPadding = 42.dp,
+      firstRowTopPadding = 14.dp,
+      rowKeyPrefix = { it.uid },
+    ) { flatIndex, item, cellModifier ->
+      TvFocusablePosterCard(
+        item = item,
+        rank = if (showRank) flatIndex + 1 else null,
+        isSaved = item.id in savedIds,
+        onFocus = { onFocusItem(item) },
+        onClick = { onItemClick(item) },
+        onToggleSave = { onToggleSave(item) },
+        modifier = cellModifier,
+        cardWidth = null,
+        isReducedMotion = isReducedMotion,
+      )
+    }
+  } else {
+    item(key = "${sectionKey}_rail", contentType = "tv_rail") {
+      val title = stringResource(titleRes)
+      val kicker = "${stringResource(kickerRes)}  •  ${items.size} titles"
+      TvSectionRail(
+        title = title,
+        kicker = kicker,
+        items = items,
+        savedIds = savedIds,
+        showRank = showRank,
+        isGridMode = false,
+        listState = listState,
+        isReducedMotion = isReducedMotion,
+        onToggleGridMode = onToggleGridMode,
+        onSeeAll = onSeeAll,
+        onFocusItem = onFocusItem,
         onItemClick = onItemClick,
         onToggleSave = onToggleSave,
-        onClose = { onToggleSearch(false) },
+        modifier = Modifier.padding(top = 28.dp),
       )
     }
   }
@@ -663,6 +844,66 @@ private fun TvSeeAllChip(
 }
 
 @Composable
+private fun TvLanguageTogglePill(
+  selectedFilter: LatestLanguageFilter,
+  onSelectFilter: (LatestLanguageFilter) -> Unit,
+) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = ObsidianSurface,
+    border = BorderStroke(1.dp, BorderSubtle),
+  ) {
+    Row(
+      modifier = Modifier.padding(3.dp),
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      LatestLanguageFilter.entries.forEach { filter ->
+        val selected = filter == selectedFilter
+        var isFocused by remember { mutableStateOf(false) }
+        Surface(
+          modifier =
+            Modifier.height(36.dp)
+              .onFocusChanged { isFocused = it.isFocused }
+              .focusable()
+              .clip(RoundedCornerShape(9.dp))
+              .clickable { onSelectFilter(filter) }
+              .testTag("tv_lang_${filter.name.lowercase()}"),
+          shape = RoundedCornerShape(9.dp),
+          color =
+            when {
+              isFocused -> TextPrimary
+              selected -> ToonVioletPrimary
+              else -> Color.Transparent
+            },
+          border = if (isFocused) BorderStroke(2.dp, ToonVioletPrimary) else null,
+        ) {
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.padding(horizontal = 12.dp),
+          ) {
+            Text(
+              text = filter.label,
+              style =
+                MaterialTheme.typography.labelLarge.copy(
+                  fontWeight = if (selected || isFocused) FontWeight.Bold else FontWeight.SemiBold,
+                ),
+              color =
+                when {
+                  isFocused -> ObsidianBg
+                  selected -> TextPrimary
+                  else -> TextOffWhite
+                },
+              maxLines = 1,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun TvViewModeTogglePill(
   isGridMode: Boolean,
   onToggleGridMode: (Boolean) -> Unit,
@@ -751,6 +992,9 @@ private fun TvHeroSpotlightShowcase(
   onFocusItem: (AnimeItem) -> Unit,
 ) {
   val context = LocalContext.current
+  val currentHeroIndex by remember(heroItems, pagerState) {
+    derivedStateOf { pagerState.currentPage % heroItems.size }
+  }
   val tvBannerGradient =
     remember {
       Brush.horizontalGradient(
@@ -777,7 +1021,8 @@ private fun TvHeroSpotlightShowcase(
             ImageRequest.Builder(context)
               .data(url)
               .crossfade(false)
-              .size(1280, 720)
+              .size(1024, 576)
+              .precision(Precision.INEXACT)
               .build()
           }
         AsyncImage(
@@ -833,7 +1078,7 @@ private fun TvHeroSpotlightShowcase(
             )
             CarouselDotIndicator(
               count = heroItems.size,
-              currentIndex = pagerState.currentPage % heroItems.size,
+              currentIndex = currentHeroIndex,
             )
           }
         }
@@ -853,6 +1098,50 @@ private fun TvHeroSpotlightShowcase(
 }
 
 @Composable
+private fun TvSectionHeader(
+  title: String,
+  kicker: String,
+  isGridMode: Boolean,
+  isReducedMotion: Boolean,
+  onToggleGridMode: (Boolean) -> Unit,
+  onSeeAll: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth().padding(horizontal = 42.dp),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Column {
+      Text(
+        text = kicker,
+        style = MaterialTheme.typography.labelLarge,
+        color = TextSecondary,
+      )
+      Text(
+        text = title,
+        style = MaterialTheme.typography.headlineSmall.copy(fontSize = 23.sp),
+        color = TextPrimary,
+      )
+    }
+    Row(
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      TvViewModeTogglePill(
+        isGridMode = isGridMode,
+        onToggleGridMode = onToggleGridMode,
+      )
+      TvSeeAllChip(
+        isReducedMotion = isReducedMotion,
+        onClick = onSeeAll,
+        testTag = "tv_see_all_${title.lowercase().replace(" ", "_")}",
+      )
+    }
+  }
+}
+
+@Composable
 private fun TvSectionRail(
   title: String,
   kicker: String,
@@ -867,92 +1156,27 @@ private fun TvSectionRail(
   onFocusItem: (AnimeItem) -> Unit,
   onItemClick: (AnimeItem) -> Unit,
   onToggleSave: (AnimeItem) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 42.dp),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Column {
-        Text(
-          text = kicker,
-          style = MaterialTheme.typography.labelLarge,
-          color = TextSecondary,
-        )
-        Text(
-          text = title,
-          style = MaterialTheme.typography.headlineSmall.copy(fontSize = 23.sp),
-          color = TextPrimary,
-        )
-      }
-      Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        TvViewModeTogglePill(
-          isGridMode = isGridMode,
-          onToggleGridMode = onToggleGridMode,
-        )
-        TvSeeAllChip(
-          isReducedMotion = isReducedMotion,
-          onClick = onSeeAll,
-          testTag = "tv_see_all_${title.lowercase().replace(" ", "_")}",
-        )
-      }
-    }
-
-    if (isGridMode) {
-      TvSectionInlineGrid(
-        items = items.take(12),
-        savedIds = savedIds,
-        showRank = showRank,
-        isReducedMotion = isReducedMotion,
-        onFocusItem = onFocusItem,
-        onItemClick = onItemClick,
-        onToggleSave = onToggleSave,
-      )
-    } else {
-      TvPosterLazyRow(
-        items = items,
-        savedIds = savedIds,
-        showRank = showRank,
-        listState = listState,
-        isReducedMotion = isReducedMotion,
-        onFocusItem = onFocusItem,
-        onItemClick = onItemClick,
-        onToggleSave = onToggleSave,
-      )
-    }
-  }
-}
-
-@Composable
-private fun TvSectionInlineGrid(
-  items: List<AnimeItem>,
-  savedIds: Set<String>,
-  showRank: Boolean,
-  isReducedMotion: Boolean,
-  onFocusItem: (AnimeItem) -> Unit,
-  onItemClick: (AnimeItem) -> Unit,
-  onToggleSave: (AnimeItem) -> Unit,
-) {
-  ResponsiveSectionGrid(
-    items = items,
-    cardWidth = 176.dp,
-    itemSpacing = 18.dp,
-    horizontalPadding = 42.dp,
-  ) { flatIndex, item, cellModifier ->
-    TvFocusablePosterCard(
-      item = item,
-      rank = if (showRank) flatIndex + 1 else null,
-      isSaved = item.id in savedIds,
-      onFocus = { onFocusItem(item) },
-      onClick = { onItemClick(item) },
-      onToggleSave = { onToggleSave(item) },
-      modifier = cellModifier,
-      cardWidth = null,
+  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    TvSectionHeader(
+      title = title,
+      kicker = kicker,
+      isGridMode = isGridMode,
       isReducedMotion = isReducedMotion,
+      onToggleGridMode = onToggleGridMode,
+      onSeeAll = onSeeAll,
+    )
+
+    TvPosterLazyRow(
+      items = items,
+      savedIds = savedIds,
+      showRank = showRank,
+      listState = listState,
+      isReducedMotion = isReducedMotion,
+      onFocusItem = onFocusItem,
+      onItemClick = onItemClick,
+      onToggleSave = onToggleSave,
     )
   }
 }
@@ -1027,6 +1251,7 @@ private fun TvFocusablePosterCard(
         .data(imageUrl)
         .crossfade(false)
         .size(380, 480)
+        .precision(Precision.INEXACT)
         .build()
     }
   var isFocused by remember { mutableStateOf(false) }

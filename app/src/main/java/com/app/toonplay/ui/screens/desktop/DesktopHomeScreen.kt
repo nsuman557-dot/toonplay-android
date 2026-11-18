@@ -5,6 +5,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -39,9 +41,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -55,12 +59,15 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.app.toonplay.R
 import com.app.toonplay.data.model.AnimeItem
 import com.app.toonplay.data.model.AnimeSectionTab
+import com.app.toonplay.data.model.DeviceFormFactor
 import com.app.toonplay.data.model.HomeFeed
 import com.app.toonplay.data.model.LatestLanguageFilter
 import com.app.toonplay.ui.components.AnimeDetailInspectorPane
@@ -68,16 +75,21 @@ import com.app.toonplay.ui.components.AnimePosterCard
 import com.app.toonplay.ui.components.AnimePosterGrid
 import com.app.toonplay.ui.components.CarouselDotIndicator
 import com.app.toonplay.ui.components.FannedHeroCarousel
-import com.app.toonplay.ui.components.GlassSearchBar
+import com.app.toonplay.ui.components.HorizontalRailScrollControls
+import com.app.toonplay.ui.components.LanguageCardsRail
 import com.app.toonplay.ui.components.LatestControlsBar
 import com.app.toonplay.ui.components.MetadataPill
+import com.app.toonplay.ui.components.ProvideSmoothBringIntoView
+import com.app.toonplay.ui.components.SearchBarTrigger
 import com.app.toonplay.ui.components.SectionHeaderRow
 import com.app.toonplay.ui.components.StarRatingPill
 import com.app.toonplay.ui.components.ToonPlayNavItems
 import com.app.toonplay.ui.components.ToonPlayProfileView
 import com.app.toonplay.ui.components.ToonPlayWordmark
 import com.app.toonplay.ui.components.calculateCompleteGridColumns
-import com.app.toonplay.ui.state.HomeScreenUiState
+import com.app.toonplay.ui.components.rememberIsReducedMotion
+import com.app.toonplay.ui.components.smoothMouseWheelScroll
+import com.app.toonplay.ui.state.HomeFeedControlsState
 import com.app.toonplay.ui.theme.BorderSubtle
 import com.app.toonplay.ui.theme.ObsidianBg
 import com.app.toonplay.ui.theme.ObsidianCard
@@ -87,12 +99,16 @@ import com.app.toonplay.ui.theme.TextPrimary
 import com.app.toonplay.ui.theme.TextSecondary
 import com.app.toonplay.ui.theme.ToonVioletPrimary
 import com.app.toonplay.ui.theme.ToonVioletSoft
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 @Composable
 fun DesktopHomeScreen(
   feed: HomeFeed,
-  uiState: HomeScreenUiState,
+  controls: HomeFeedControlsState,
+  focusedPreviewFlow: StateFlow<AnimeItem?>,
+  initialHeroIndex: Int,
   onSelectTab: (AnimeSectionTab) -> Unit,
   onSelectLanguageFilter: (LatestLanguageFilter) -> Unit,
   onToggleSectionGrid: (AnimeSectionTab, Boolean) -> Unit,
@@ -100,15 +116,16 @@ fun DesktopHomeScreen(
   onFocusItem: (AnimeItem) -> Unit,
   onExpandDetail: (AnimeItem) -> Unit,
   onToggleSave: (AnimeItem) -> Unit,
-  onSearchQueryChange: (String) -> Unit,
+  onToggleSearch: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var showInspector by remember { mutableStateOf(false) }
+  var inspectorHeroItem by remember { mutableStateOf<AnimeItem?>(null) }
   val heroItems = feed.hero
   val heroCount = heroItems.size.coerceAtLeast(1)
   val virtualCount = if (heroItems.size > 1) heroCount * 400 else heroCount
   val initialPage =
-    if (heroItems.size > 1) heroCount * 200 + (uiState.activeHeroIndex % heroCount) else 0
+    if (heroItems.size > 1) heroCount * 200 + (initialHeroIndex % heroCount) else 0
 
   val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { virtualCount })
   LaunchedEffect(pagerState, heroCount) {
@@ -116,13 +133,13 @@ fun DesktopHomeScreen(
       .distinctUntilChanged()
       .collect { idx ->
         onHeroIndexChanged(idx)
-        heroItems.getOrNull(idx)?.let(onFocusItem)
+        inspectorHeroItem = null
       }
   }
 
   val latestList =
-    remember(feed, uiState.latestLanguageFilter) {
-      when (uiState.latestLanguageFilter) {
+    remember(feed, controls.latestLanguageFilter) {
+      when (controls.latestLanguageFilter) {
         LatestLanguageFilter.JAP_ENG -> feed.globalLatest
         LatestLanguageFilter.HIN_TAM_TEL -> feed.latestReleases
       }
@@ -133,9 +150,14 @@ fun DesktopHomeScreen(
   val homepageSeries = remember(feed.popularSeries) { feed.popularSeries.take(12) }
   val homepageMovies = remember(feed.popularMovies) { feed.popularMovies.take(12) }
 
-  val inspectorItem =
-    uiState.focusedPreviewItem ?: heroItems.firstOrNull() ?: latestList.firstOrNull()
   val homeListState = rememberLazyListState()
+  val languageRowState = rememberLazyListState()
+  val latestRowState = rememberLazyListState()
+  val childhoodRowState = rememberLazyListState()
+  val seriesRowState = rememberLazyListState()
+  val moviesRowState = rememberLazyListState()
+  val scope = rememberCoroutineScope()
+  val isReducedMotion = rememberIsReducedMotion()
   val animeCatalog =
     remember(feed) {
       (feed.popularSeries + feed.globalLatest + feed.latestReleases).distinctBy { it.id }
@@ -171,7 +193,7 @@ fun DesktopHomeScreen(
           DesktopSidebarItem(
             label = label,
             iconRes = navItem.iconRes,
-            selected = uiState.selectedTab == navItem.tab,
+            selected = controls.selectedTab == navItem.tab,
             onClick = { onSelectTab(navItem.tab) },
             testTag = "desktop_nav_${navItem.tab.name.lowercase()}",
           )
@@ -190,18 +212,26 @@ fun DesktopHomeScreen(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
-          text = uiState.selectedTab.label,
+          text = controls.selectedTab.label,
           style = MaterialTheme.typography.headlineSmall,
           color = TextPrimary,
         )
         Spacer(modifier = Modifier.width(8.dp))
-        GlassSearchBar(
-          query = uiState.searchQuery,
-          onQueryChange = onSearchQueryChange,
+        SearchBarTrigger(
+          onClick = { onToggleSearch(true) },
           modifier = Modifier.weight(1f),
+          testTag = "desktop_search_button",
         )
         Surface(
-          onClick = { showInspector = !showInspector },
+          onClick = {
+            if (showInspector) {
+              showInspector = false
+              inspectorHeroItem = null
+            } else {
+              inspectorHeroItem = null
+              showInspector = true
+            }
+          },
           shape = RoundedCornerShape(12.dp),
           color = if (showInspector) ToonVioletSoft else ObsidianCard,
           border = BorderStroke(1.dp, if (showInspector) ToonVioletPrimary else BorderSubtle),
@@ -219,203 +249,347 @@ fun DesktopHomeScreen(
         modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
       ) {
-        val paneMode = if (uiState.searchQuery.isNotBlank()) null else uiState.selectedTab
         Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-          Crossfade(
-            targetState = paneMode,
-            animationSpec = tween(durationMillis = 150),
-            label = "desktop_tab_crossfade",
-          ) { tab ->
-            if (tab == null) {
-              AnimePosterGrid(
-                items = uiState.searchResults,
-                savedIds = uiState.savedIds,
-                onItemClick = {
-                  onFocusItem(it)
-                  showInspector = true
-                },
-                onToggleSave = onToggleSave,
-                minCellWidth = 156.dp,
-                enableHoverLift = true,
-              )
-            } else if (tab == AnimeSectionTab.HOME) {
-              LazyColumn(
-                state = homeListState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = 12.dp, bottom = 36.dp),
-                verticalArrangement = Arrangement.spacedBy(28.dp),
-              ) {
-                if (heroItems.isNotEmpty()) {
-                  item(key = "desktop_hero", contentType = "hero") {
-                    DesktopWidescreenHero(
-                      heroItems = heroItems,
-                      pagerState = pagerState,
-                      onExplore = onExpandDetail,
-                      onFocusItem = {
-                        onFocusItem(it)
-                        showInspector = true
-                      },
-                    )
-                  }
-                }
+          ProvideSmoothBringIntoView(edgeMargin = 24.dp, isReducedMotion = isReducedMotion) {
+            Crossfade(
+              targetState = controls.selectedTab,
+              animationSpec = tween(durationMillis = if (isReducedMotion) 0 else 150),
+              label = "desktop_tab_crossfade",
+            ) { tab ->
+              if (tab == AnimeSectionTab.HOME) {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                  val contentWidth = this.maxWidth
+                  val latestCols =
+                    remember(contentWidth) {
+                      calculateCompleteGridColumns(contentWidth, 168.dp, 16.dp, minColumns = 1)
+                    }
+                  val childhoodCols =
+                    remember(contentWidth) {
+                      calculateCompleteGridColumns(contentWidth, 164.dp, 16.dp, minColumns = 1)
+                    }
+                  val railCols =
+                    remember(contentWidth) {
+                      calculateCompleteGridColumns(contentWidth, 162.dp, 16.dp, minColumns = 1)
+                    }
+                  val railConfigs =
+                    remember(homepageSeries, homepageMovies) {
+                      listOf(
+                        Triple(
+                          R.string.section_popular_series,
+                          R.string.section_popular_series_sub,
+                          Triple(homepageSeries, AnimeSectionTab.SERIES, seriesRowState),
+                        ),
+                        Triple(
+                          R.string.section_popular_movies,
+                          R.string.section_popular_movies_sub,
+                          Triple(homepageMovies, AnimeSectionTab.MOVIES, moviesRowState),
+                        ),
+                      )
+                    }
 
-                // 1. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items)
-                if (homepageLatest.isNotEmpty()) {
-                  item(key = "desktop_latest_rail", contentType = "rail") {
-                    val isGrid = AnimeSectionTab.LATEST in uiState.gridModeTabs
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                      SectionHeaderRow(
-                        title = stringResource(R.string.section_latest_combined),
-                        kicker = stringResource(R.string.section_latest_combined_sub),
-                        itemCount = homepageLatest.size,
-                      )
-                      LatestControlsBar(
-                        selectedFilter = uiState.latestLanguageFilter,
-                        onSelectFilter = onSelectLanguageFilter,
-                        onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
-                        isGridMode = isGrid,
-                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
-                      )
+                  LazyColumn(
+                    state = homeListState,
+                    modifier =
+                      Modifier.fillMaxSize()
+                        .smoothMouseWheelScroll(homeListState, Orientation.Vertical, isReducedMotion),
+                    contentPadding = PaddingValues(top = 12.dp, bottom = 36.dp),
+                    verticalArrangement = Arrangement.Top,
+                  ) {
+                    if (heroItems.isNotEmpty()) {
+                      item(key = "desktop_hero", contentType = "hero") {
+                        DesktopWidescreenHero(
+                          heroItems = heroItems,
+                          pagerState = pagerState,
+                          onExplore = onExpandDetail,
+                          onFocusItem = {
+                            onFocusItem(it)
+                            inspectorHeroItem = it
+                            showInspector = true
+                          },
+                        )
+                      }
+                    }
+
+                    // 1. Explore by Language (9 sliding 2:1 banner cards)
+                    item(key = "desktop_language_cards", contentType = "language_rail") {
+                      val latestItemIndex = if (heroItems.isNotEmpty()) 2 else 1
+                      Box(modifier = Modifier.padding(top = if (heroItems.isNotEmpty()) 28.dp else 0.dp)) {
+                        LanguageCardsRail(
+                          formFactor = DeviceFormFactor.DESKTOP,
+                          listState = languageRowState,
+                          horizontalPadding = 0.dp,
+                          itemSpacing = 10.dp,
+                          sectionSpacing = 12.dp,
+                          showScrollControls = true,
+                          enableHoverLift = true,
+                          isReducedMotion = isReducedMotion,
+                          testTagPrefix = "desktop_languages",
+                          onCardClick = { card ->
+                            onSelectLanguageFilter(card.latestFilter)
+                            scope.launch {
+                              if (isReducedMotion) {
+                                homeListState.scrollToItem(latestItemIndex)
+                              } else {
+                                homeListState.animateScrollToItem(latestItemIndex)
+                              }
+                            }
+                          },
+                        )
+                      }
+                    }
+
+                    // 2. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items)
+                    if (homepageLatest.isNotEmpty()) {
+                      val isGrid = AnimeSectionTab.LATEST in controls.gridModeTabs
                       if (isGrid) {
-                        DesktopSectionInlineGrid(
+                        item(key = "desktop_latest_header", contentType = "section_header") {
+                          Column(
+                            modifier = Modifier.padding(top = 28.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                          ) {
+                            SectionHeaderRow(
+                              title = stringResource(R.string.section_latest_combined),
+                              kicker = stringResource(R.string.section_latest_combined_sub),
+                              itemCount = homepageLatest.size,
+                            )
+                            LatestControlsBar(
+                              selectedFilter = controls.latestLanguageFilter,
+                              onSelectFilter = onSelectLanguageFilter,
+                              onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
+                              isGridMode = true,
+                              onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
+                              trailingLeadingControls = null,
+                            )
+                          }
+                        }
+                        desktopInlinePosterGridRows(
+                          sectionKey = "desktop_latest",
                           items = homepageLatest,
-                          savedIds = uiState.savedIds,
-                          showRank = false,
-                          onItemClick = {
-                            onFocusItem(it)
-                            showInspector = true
-                          },
-                          onToggleSave = onToggleSave,
+                          columns = latestCols,
                           cardWidth = 168.dp,
-                        )
-                      } else {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                          items(items = homepageLatest, key = { it.uid }) { item ->
-                            AnimePosterCard(
-                              item = item,
-                              onClick = {
-                                onFocusItem(item)
-                                showInspector = true
-                              },
-                              width = 168.dp,
-                              isSaved = item.id in uiState.savedIds,
-                              onToggleSave = { onToggleSave(item) },
-                              showActionFooter = true,
-                              enableHoverLift = true,
-                            )
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-
-                // 2. Childhood Shows (max 12 items)
-                if (homepageChildhood.isNotEmpty()) {
-                  item(key = "desktop_childhood_rail", contentType = "rail") {
-                    val isGrid = AnimeSectionTab.CHILDHOOD in uiState.gridModeTabs
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                      SectionHeaderRow(
-                        title = stringResource(R.string.section_childhood_shows),
-                        kicker = stringResource(R.string.section_childhood_shows_sub),
-                        itemCount = homepageChildhood.size,
-                        onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
-                        isGridMode = isGrid,
-                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
-                      )
-                      if (isGrid) {
-                        DesktopSectionInlineGrid(
-                          items = homepageChildhood,
-                          savedIds = uiState.savedIds,
-                          showRank = true,
-                          onItemClick = {
-                            onFocusItem(it)
-                            showInspector = true
-                          },
+                          savedIds = controls.savedIds,
+                          showRank = false,
+                          onItemClick = onExpandDetail,
                           onToggleSave = onToggleSave,
-                          cardWidth = 164.dp,
                         )
                       } else {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                          itemsIndexed(
-                            items = homepageChildhood,
-                            key = { _, it -> it.uid },
-                          ) { idx, item ->
-                            AnimePosterCard(
-                              item = item,
-                              onClick = {
-                                onFocusItem(item)
-                                showInspector = true
-                              },
-                              width = 164.dp,
-                              isSaved = item.id in uiState.savedIds,
-                              onToggleSave = { onToggleSave(item) },
-                              rankBadge = idx + 1,
-                              showActionFooter = true,
-                              enableHoverLift = true,
+                        item(key = "desktop_latest_rail", contentType = "rail") {
+                          Column(
+                            modifier = Modifier.padding(top = 28.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                          ) {
+                            SectionHeaderRow(
+                              title = stringResource(R.string.section_latest_combined),
+                              kicker = stringResource(R.string.section_latest_combined_sub),
+                              itemCount = homepageLatest.size,
                             )
+                            LatestControlsBar(
+                              selectedFilter = controls.latestLanguageFilter,
+                              onSelectFilter = onSelectLanguageFilter,
+                              onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
+                              isGridMode = false,
+                              onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
+                              trailingLeadingControls = {
+                                HorizontalRailScrollControls(
+                                  listState = latestRowState,
+                                  stepDistance = 368.dp,
+                                  isReducedMotion = isReducedMotion,
+                                  testTagPrefix = "desktop_latest",
+                                )
+                              },
+                            )
+                            LazyRow(
+                              state = latestRowState,
+                              horizontalArrangement = Arrangement.spacedBy(16.dp),
+                              modifier =
+                                Modifier.smoothMouseWheelScroll(
+                                  scrollableState = latestRowState,
+                                  orientation = Orientation.Horizontal,
+                                  isReducedMotion = isReducedMotion,
+                                ),
+                            ) {
+                              items(
+                                items = homepageLatest,
+                                key = { it.uid },
+                                contentType = { "unified_card" },
+                              ) { item ->
+                                AnimePosterCard(
+                                  item = item,
+                                  onClick = { onExpandDetail(item) },
+                                  width = 168.dp,
+                                  isSaved = item.id in controls.savedIds,
+                                  onToggleSave = { onToggleSave(item) },
+                                  showActionFooter = true,
+                                  enableHoverLift = true,
+                                )
+                              }
+                            }
                           }
                         }
                       }
                     }
-                  }
-                }
 
-                // 3. Most Popular TV Series & 4. Blockbuster Anime Movies (max 12 items)
-                val railConfigs =
-                  listOf(
-                    Triple(
-                      R.string.section_popular_series,
-                      R.string.section_popular_series_sub,
-                      homepageSeries to AnimeSectionTab.SERIES,
-                    ),
-                    Triple(
-                      R.string.section_popular_movies,
-                      R.string.section_popular_movies_sub,
-                      homepageMovies to AnimeSectionTab.MOVIES,
-                    ),
-                  )
-                railConfigs.forEach { (titleRes, subRes, pair) ->
-                  val (list, tab) = pair
-                  if (list.isNotEmpty()) {
-                    item(key = "desktop_rail_${tab.name}", contentType = "rail") {
-                      val isGrid = tab in uiState.gridModeTabs
-                      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeaderRow(
-                          title = stringResource(titleRes),
-                          kicker = stringResource(subRes),
-                          itemCount = list.size,
-                          onSeeAll = { onSelectTab(tab) },
-                          isGridMode = isGrid,
-                          onToggleGridMode = { onToggleSectionGrid(tab, it) },
+                    // 3. Childhood Shows (max 12 items)
+                    if (homepageChildhood.isNotEmpty()) {
+                      val isGrid = AnimeSectionTab.CHILDHOOD in controls.gridModeTabs
+                      if (isGrid) {
+                        item(key = "desktop_childhood_header", contentType = "section_header") {
+                          Box(modifier = Modifier.padding(top = 28.dp)) {
+                            SectionHeaderRow(
+                              title = stringResource(R.string.section_childhood_shows),
+                              kicker = stringResource(R.string.section_childhood_shows_sub),
+                              itemCount = homepageChildhood.size,
+                              onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
+                              isGridMode = true,
+                              onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
+                              trailingLeadingControls = null,
+                            )
+                          }
+                        }
+                        desktopInlinePosterGridRows(
+                          sectionKey = "desktop_childhood",
+                          items = homepageChildhood,
+                          columns = childhoodCols,
+                          cardWidth = 164.dp,
+                          savedIds = controls.savedIds,
+                          showRank = true,
+                          onItemClick = onExpandDetail,
+                          onToggleSave = onToggleSave,
                         )
+                      } else {
+                        item(key = "desktop_childhood_rail", contentType = "rail") {
+                          Column(
+                            modifier = Modifier.padding(top = 28.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                          ) {
+                            SectionHeaderRow(
+                              title = stringResource(R.string.section_childhood_shows),
+                              kicker = stringResource(R.string.section_childhood_shows_sub),
+                              itemCount = homepageChildhood.size,
+                              onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
+                              isGridMode = false,
+                              onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
+                              trailingLeadingControls = {
+                                HorizontalRailScrollControls(
+                                  listState = childhoodRowState,
+                                  stepDistance = 360.dp,
+                                  isReducedMotion = isReducedMotion,
+                                  testTagPrefix = "desktop_childhood",
+                                )
+                              },
+                            )
+                            LazyRow(
+                              state = childhoodRowState,
+                              horizontalArrangement = Arrangement.spacedBy(16.dp),
+                              modifier =
+                                Modifier.smoothMouseWheelScroll(
+                                  scrollableState = childhoodRowState,
+                                  orientation = Orientation.Horizontal,
+                                  isReducedMotion = isReducedMotion,
+                                ),
+                            ) {
+                              itemsIndexed(
+                                items = homepageChildhood,
+                                key = { _, it -> it.uid },
+                                contentType = { _, _ -> "unified_card" },
+                              ) { idx, item ->
+                                AnimePosterCard(
+                                  item = item,
+                                  onClick = { onExpandDetail(item) },
+                                  width = 164.dp,
+                                  isSaved = item.id in controls.savedIds,
+                                  onToggleSave = { onToggleSave(item) },
+                                  rankBadge = idx + 1,
+                                  showActionFooter = true,
+                                  enableHoverLift = true,
+                                )
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+
+                    // 4. Most Popular TV Series & 5. Blockbuster Anime Movies (max 12 items)
+                    railConfigs.forEach { (titleRes, subRes, triple) ->
+                      val (list, railTab, rowState) = triple
+                      if (list.isNotEmpty()) {
+                        val isGrid = railTab in controls.gridModeTabs
                         if (isGrid) {
-                          DesktopSectionInlineGrid(
+                          item(
+                            key = "desktop_rail_header_${railTab.name}",
+                            contentType = "section_header",
+                          ) {
+                            Box(modifier = Modifier.padding(top = 28.dp)) {
+                              SectionHeaderRow(
+                                title = stringResource(titleRes),
+                                kicker = stringResource(subRes),
+                                itemCount = list.size,
+                                onSeeAll = { onSelectTab(railTab) },
+                                isGridMode = true,
+                                onToggleGridMode = { onToggleSectionGrid(railTab, it) },
+                                trailingLeadingControls = null,
+                              )
+                            }
+                          }
+                          desktopInlinePosterGridRows(
+                            sectionKey = "desktop_${railTab.name.lowercase()}",
                             items = list,
-                            savedIds = uiState.savedIds,
-                            showRank = false,
-                            onItemClick = {
-                              onFocusItem(it)
-                              showInspector = true
-                            },
-                            onToggleSave = onToggleSave,
+                            columns = railCols,
                             cardWidth = 162.dp,
+                            savedIds = controls.savedIds,
+                            showRank = false,
+                            onItemClick = onExpandDetail,
+                            onToggleSave = onToggleSave,
                           )
                         } else {
-                          LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            items(items = list, key = { it.uid }) { item ->
-                              AnimePosterCard(
-                                item = item,
-                                onClick = {
-                                  onFocusItem(item)
-                                  showInspector = true
+                          item(key = "desktop_rail_${railTab.name}", contentType = "rail") {
+                            Column(
+                              modifier = Modifier.padding(top = 28.dp),
+                              verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                              SectionHeaderRow(
+                                title = stringResource(titleRes),
+                                kicker = stringResource(subRes),
+                                itemCount = list.size,
+                                onSeeAll = { onSelectTab(railTab) },
+                                isGridMode = false,
+                                onToggleGridMode = { onToggleSectionGrid(railTab, it) },
+                                trailingLeadingControls = {
+                                  HorizontalRailScrollControls(
+                                    listState = rowState,
+                                    stepDistance = 356.dp,
+                                    isReducedMotion = isReducedMotion,
+                                    testTagPrefix = "desktop_${railTab.name.lowercase()}",
+                                  )
                                 },
-                                width = 162.dp,
-                                isSaved = item.id in uiState.savedIds,
-                                onToggleSave = { onToggleSave(item) },
-                                showActionFooter = true,
-                                enableHoverLift = true,
                               )
+                              LazyRow(
+                                state = rowState,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier =
+                                  Modifier.smoothMouseWheelScroll(
+                                    scrollableState = rowState,
+                                    orientation = Orientation.Horizontal,
+                                    isReducedMotion = isReducedMotion,
+                                  ),
+                              ) {
+                                items(
+                                  items = list,
+                                  key = { it.uid },
+                                  contentType = { "unified_card" },
+                                ) { item ->
+                                  AnimePosterCard(
+                                    item = item,
+                                    onClick = { onExpandDetail(item) },
+                                    width = 162.dp,
+                                    isSaved = item.id in controls.savedIds,
+                                    onToggleSave = { onToggleSave(item) },
+                                    showActionFooter = true,
+                                    enableHoverLift = true,
+                                  )
+                                }
+                              }
                             }
                           }
                         }
@@ -423,125 +597,150 @@ fun DesktopHomeScreen(
                     }
                   }
                 }
+              } else if (tab == AnimeSectionTab.PROFILE) {
+                ToonPlayProfileView(
+                  feed = feed,
+                  savedItems = controls.savedItems,
+                  savedIds = controls.savedIds,
+                  selectedLanguageFilter = controls.latestLanguageFilter,
+                  onSelectLanguageFilter = onSelectLanguageFilter,
+                  onItemClick = onExpandDetail,
+                  onToggleSave = onToggleSave,
+                  onExploreHome = { onSelectTab(AnimeSectionTab.HOME) },
+                  horizontalPadding = 0.dp,
+                  bottomPadding = 32.dp,
+                  enableHoverLift = true,
+                )
+              } else {
+                val items =
+                  when (tab) {
+                    AnimeSectionTab.ANIME -> animeCatalog
+                    AnimeSectionTab.CARTOON -> cartoonCatalog
+                    AnimeSectionTab.LATEST -> latestList
+                    AnimeSectionTab.CHILDHOOD -> feed.childhoodShows
+                    AnimeSectionTab.SERIES -> feed.popularSeries
+                    AnimeSectionTab.MOVIES -> feed.popularMovies
+                    AnimeSectionTab.SAVED -> controls.savedItems
+                    AnimeSectionTab.HOME,
+                    AnimeSectionTab.PROFILE -> emptyList()
+                  }
+                AnimePosterGrid(
+                  items = items,
+                  savedIds = controls.savedIds,
+                  onItemClick = onExpandDetail,
+                  onToggleSave = onToggleSave,
+                  minCellWidth = 156.dp,
+                  enableHoverLift = true,
+                )
               }
-            } else if (tab == AnimeSectionTab.PROFILE) {
-              ToonPlayProfileView(
-                feed = feed,
-                savedItems = uiState.savedItems,
-                savedIds = uiState.savedIds,
-                selectedLanguageFilter = uiState.latestLanguageFilter,
-                onSelectLanguageFilter = onSelectLanguageFilter,
-                onItemClick = {
-                  onFocusItem(it)
-                  showInspector = true
-                },
-                onToggleSave = onToggleSave,
-                onExploreHome = { onSelectTab(AnimeSectionTab.HOME) },
-                horizontalPadding = 0.dp,
-                bottomPadding = 32.dp,
-              )
-            } else {
-              val items =
-                when (tab) {
-                  AnimeSectionTab.ANIME -> animeCatalog
-                  AnimeSectionTab.CARTOON -> cartoonCatalog
-                  AnimeSectionTab.LATEST -> latestList
-                  AnimeSectionTab.CHILDHOOD -> feed.childhoodShows
-                  AnimeSectionTab.SERIES -> feed.popularSeries
-                  AnimeSectionTab.MOVIES -> feed.popularMovies
-                  AnimeSectionTab.SAVED -> uiState.savedItems
-                  AnimeSectionTab.HOME,
-                  AnimeSectionTab.PROFILE -> emptyList()
-                }
-              AnimePosterGrid(
-                items = items,
-                savedIds = uiState.savedIds,
-                onItemClick = {
-                  onFocusItem(it)
-                  showInspector = true
-                },
-                onToggleSave = onToggleSave,
-                minCellWidth = 156.dp,
-                enableHoverLift = true,
-              )
             }
           }
         }
 
-        AnimatedVisibility(visible = showInspector && inspectorItem != null) {
-          inspectorItem?.let { current ->
-            Box(modifier = Modifier.width(340.dp).fillMaxHeight().padding(bottom = 20.dp)) {
-              AnimeDetailInspectorPane(
-                item = current,
-                isSaved = current.id in uiState.savedIds,
-                onToggleSave = { onToggleSave(current) },
-                onExpandFull = { onExpandDetail(current) },
-                onClose = { showInspector = false },
-              )
-            }
-          }
+        AnimatedVisibility(visible = showInspector) {
+          DesktopInspectorSlot(
+            selectedHeroItem = inspectorHeroItem,
+            heroItems = heroItems,
+            pagerState = pagerState,
+            fallbackLatestItem = latestList.firstOrNull(),
+            savedIds = controls.savedIds,
+            onToggleSave = onToggleSave,
+            onExpandFull = onExpandDetail,
+            onClose = {
+              showInspector = false
+              inspectorHeroItem = null
+            },
+          )
         }
       }
     }
   }
 }
 
-  @Composable
-  private fun DesktopSectionInlineGrid(
-    items: List<AnimeItem>,
-    savedIds: Set<String>,
-    showRank: Boolean,
-    onItemClick: (AnimeItem) -> Unit,
-    onToggleSave: (AnimeItem) -> Unit,
-    cardWidth: androidx.compose.ui.unit.Dp,
-  ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+@Composable
+private fun DesktopInspectorSlot(
+  selectedHeroItem: AnimeItem?,
+  heroItems: List<AnimeItem>,
+  pagerState: androidx.compose.foundation.pager.PagerState,
+  fallbackLatestItem: AnimeItem?,
+  savedIds: Set<String>,
+  onToggleSave: (AnimeItem) -> Unit,
+  onExpandFull: (AnimeItem) -> Unit,
+  onClose: () -> Unit,
+) {
+  val activeHeroIndex by remember(heroItems, pagerState) {
+    derivedStateOf {
+      if (heroItems.isEmpty()) 0 else pagerState.currentPage % heroItems.size
+    }
+  }
+  val current = selectedHeroItem ?: heroItems.getOrNull(activeHeroIndex) ?: fallbackLatestItem ?: return
+  Box(modifier = Modifier.width(340.dp).fillMaxHeight().padding(bottom = 20.dp)) {
+    AnimeDetailInspectorPane(
+      item = current,
+      isSaved = current.id in savedIds,
+      onToggleSave = { onToggleSave(current) },
+      onExpandFull = { onExpandFull(current) },
+      onClose = onClose,
+    )
+  }
+}
 
-      val itemSpacing = 16.dp
-      val availableWidth = this.maxWidth
-      val columnCount = calculateCompleteGridColumns(
-        availableWidth = availableWidth,
-        cardWidth = cardWidth,
-        spacing = itemSpacing,
-        minColumns = 1,
-      )
-
-      Column(
-        verticalArrangement = Arrangement.spacedBy(itemSpacing)
-      ) {
-        items.chunked(columnCount).forEachIndexed { rowIdx, row ->
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(itemSpacing),
-          ) {
-            row.forEachIndexed { colIdx, item ->
-              val rank = if (showRank) {
-                rowIdx * columnCount + colIdx + 1
-              } else {
-                null
-              }
-
-              AnimePosterCard(
-                item = item,
-                onClick = { onItemClick(item) },
-                width = cardWidth,
-                isSaved = item.id in savedIds,
-                onToggleSave = { onToggleSave(item) },
-                rankBadge = rank,
-                showActionFooter = true,
-                enableHoverLift = true,
-                modifier = Modifier.width(cardWidth),
-              )
-            }
-
-            repeat(columnCount - row.size) {
-              Spacer(modifier = Modifier.width(cardWidth))
-            }
+private fun LazyListScope.desktopInlinePosterGridRows(
+  sectionKey: String,
+  items: List<AnimeItem>,
+  columns: Int,
+  cardWidth: Dp,
+  savedIds: Set<String>,
+  showRank: Boolean,
+  onItemClick: (AnimeItem) -> Unit,
+  onToggleSave: (AnimeItem) -> Unit,
+) {
+  val itemSpacing = 16.dp
+  val safeColumns = columns.coerceAtLeast(1)
+  val rowCount = (items.size + safeColumns - 1) / safeColumns
+  items(
+    count = rowCount,
+    key = { rowIdx ->
+      val start = rowIdx * safeColumns
+      val end = minOf(start + safeColumns, items.size)
+      val rowIds =
+        buildString {
+          for (i in start until end) {
+            if (i > start) append('_')
+            append(items[i].uid)
           }
         }
+      "${sectionKey}_grid_r${safeColumns}_${rowIdx}_$rowIds"
+    },
+    contentType = { "desktop_inline_grid_row" },
+  ) { rowIdx ->
+    val start = rowIdx * safeColumns
+    val end = minOf(start + safeColumns, items.size)
+    val topPad = if (rowIdx == 0) 12.dp else itemSpacing
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(top = topPad),
+      horizontalArrangement = Arrangement.spacedBy(itemSpacing),
+    ) {
+      for (idx in start until end) {
+        val item = items[idx]
+        AnimePosterCard(
+          item = item,
+          onClick = { onItemClick(item) },
+          width = cardWidth,
+          isSaved = item.id in savedIds,
+          onToggleSave = { onToggleSave(item) },
+          rankBadge = if (showRank) idx + 1 else null,
+          showActionFooter = true,
+          enableHoverLift = true,
+          modifier = Modifier.width(cardWidth),
+        )
+      }
+      repeat(safeColumns - (end - start)) {
+        Spacer(modifier = Modifier.width(cardWidth))
       }
     }
   }
+}
 
 @Composable
 private fun DesktopSidebarItem(
@@ -591,13 +790,18 @@ private fun DesktopWidescreenHero(
   onFocusItem: (AnimeItem) -> Unit,
 ) {
   val context = LocalContext.current
-  val activeHero = heroItems[pagerState.currentPage % heroItems.size]
+  val currentHeroIndex by remember(heroItems, pagerState) {
+    derivedStateOf { pagerState.currentPage % heroItems.size }
+  }
+  val activeHero = heroItems[currentHeroIndex]
+  val backdropUrl = activeHero.backdropUrl.ifBlank { activeHero.posterUrl }
   val backdropRequest =
-    remember(activeHero.backdropUrl) {
+    remember(backdropUrl) {
       ImageRequest.Builder(context)
-        .data(activeHero.backdropUrl)
+        .data(backdropUrl)
         .crossfade(false)
         .size(1024, 576)
+        .precision(Precision.INEXACT)
         .build()
     }
   val bannerGradient =
@@ -676,7 +880,7 @@ private fun DesktopWidescreenHero(
             }
             CarouselDotIndicator(
               count = heroItems.size,
-              currentIndex = pagerState.currentPage % heroItems.size,
+              currentIndex = currentHeroIndex,
             )
           }
         }

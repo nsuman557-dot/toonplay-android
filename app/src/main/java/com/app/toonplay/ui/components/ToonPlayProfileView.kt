@@ -117,7 +117,7 @@ fun ToonPlayProfileView(
           ),
         verticalArrangement = Arrangement.spacedBy(18.dp),
       ) {
-        item(key = "profile_header_card") {
+        item(key = "profile_header_card", contentType = "profile_header") {
           Surface(
             shape = RoundedCornerShape(22.dp),
             color = ObsidianCard,
@@ -174,7 +174,7 @@ fun ToonPlayProfileView(
           }
         }
 
-        item(key = "profile_stats_row") {
+        item(key = "profile_stats_row", contentType = "profile_stats") {
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -200,7 +200,7 @@ fun ToonPlayProfileView(
           }
         }
 
-        item(key = "profile_audio_preference") {
+        item(key = "profile_audio_preference", contentType = "profile_audio_pref") {
           Surface(
             shape = RoundedCornerShape(16.dp),
             color = ObsidianSurface,
@@ -261,7 +261,7 @@ fun ToonPlayProfileView(
           }
         }
 
-        item(key = "profile_watchlist_heading") {
+        item(key = "profile_watchlist_heading", contentType = "profile_heading") {
           SectionHeaderRow(
             title = stringResource(R.string.section_saved),
             kicker = stringResource(R.string.section_saved_sub),
@@ -308,7 +308,13 @@ fun ToonPlayProfileView(
             }
           }
         } else {
-          items(count = savedRows.size, key = { idx -> "profile_saved_row_${columns}_$idx" }) { rowIdx ->
+          items(
+            count = savedRows.size,
+            key = { idx ->
+              "profile_saved_row_${columns}_${savedRows[rowKeyIdxSafe(idx, savedRows.size)].joinToString("_") { it.uid }}"
+            },
+            contentType = { "profile_saved_row" },
+          ) { rowIdx ->
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.spacedBy(gridSpacing),
@@ -349,6 +355,8 @@ fun ToonPlayProfileView(
     }
   }
 }
+
+private fun rowKeyIdxSafe(index: Int, size: Int): Int = index.coerceIn(0, (size - 1).coerceAtLeast(0))
 
 @Composable
 private fun ProfileStatTile(

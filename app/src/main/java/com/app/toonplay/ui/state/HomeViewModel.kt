@@ -10,12 +10,17 @@ import com.app.toonplay.data.model.HomeFeed
 import com.app.toonplay.data.model.LatestLanguageFilter
 import com.app.toonplay.data.model.LayoutOverride
 import com.app.toonplay.data.repository.AnimeHomeRepository
+import com.app.toonplay.data.repository.SearchRepository
 import com.app.toonplay.data.repository.UserPreferencesRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -30,111 +35,122 @@ sealed interface FeedLoadState {
 }
 
 @Immutable
-data class HomeScreenUiState(
-  val loadState: FeedLoadState = FeedLoadState.Loading,
+data class HomeFeedControlsState(
   val selectedTab: AnimeSectionTab = AnimeSectionTab.HOME,
   val latestLanguageFilter: LatestLanguageFilter = LatestLanguageFilter.HIN_TAM_TEL,
   val gridModeTabs: Set<AnimeSectionTab> = emptySet(),
-  val searchQuery: String = "",
-  val isSearchActive: Boolean = false,
-  val searchResults: List<AnimeItem> = emptyList(),
   val savedItems: List<AnimeItem> = emptyList(),
   val savedIds: Set<String> = emptySet(),
-  val activeHeroIndex: Int = 0,
+)
+
+@Immutable
+data class HomeScreenUiState(
+  val loadState: FeedLoadState = FeedLoadState.Loading,
+  val feedControls: HomeFeedControlsState = HomeFeedControlsState(),
+  val isSearchActive: Boolean = false,
   val activeDetailItem: AnimeItem? = null,
-  val focusedPreviewItem: AnimeItem? = null,
   val layoutOverride: LayoutOverride = LayoutOverride.AUTO,
   val isRefreshing: Boolean = false,
   val isLayoutPickerOpen: Boolean = false,
-)
+) {
+  val selectedTab: AnimeSectionTab get() = feedControls.selectedTab
+  val latestLanguageFilter: LatestLanguageFilter get() = feedControls.latestLanguageFilter
+  val gridModeTabs: Set<AnimeSectionTab> get() = feedControls.gridModeTabs
+  val savedItems: List<AnimeItem> get() = feedControls.savedItems
+  val savedIds: Set<String> get() = feedControls.savedIds
+}
 
 class HomeViewModel(
   private val repository: AnimeHomeRepository,
   private val preferencesRepository: UserPreferencesRepository,
+  private val searchRepository: SearchRepository? = null,
 ) : ViewModel() {
 
   private val loadState = MutableStateFlow<FeedLoadState>(FeedLoadState.Loading)
   private val selectedTab = MutableStateFlow(AnimeSectionTab.HOME)
   private val latestLanguageFilter = MutableStateFlow(LatestLanguageFilter.HIN_TAM_TEL)
   private val gridModeTabs = MutableStateFlow<Set<AnimeSectionTab>>(emptySet())
-  private val searchQuery = MutableStateFlow("")
   private val isSearchActive = MutableStateFlow(false)
-  private val activeHeroIndex = MutableStateFlow(0)
   private val activeDetailItem = MutableStateFlow<AnimeItem?>(null)
-  private val focusedPreviewItem = MutableStateFlow<AnimeItem?>(null)
+  private val _focusedPreviewItem = MutableStateFlow<AnimeItem?>(null)
+  val focusedPreview: StateFlow<AnimeItem?> = _focusedPreviewItem.asStateFlow()
   private val isRefreshing = MutableStateFlow(false)
   private val isLayoutPickerOpen = MutableStateFlow(false)
+  private val extraSavedCatalog = MutableStateFlow<Map<String, AnimeItem>>(emptyMap())
 
-  private val baseControls =
+  @Volatile
+  var currentHeroIndex: Int = 0
+    private set
+
+  @Volatile
+  private var latestSavedIdsSnapshot: Set<String> = emptySet()
+
+  private var activeDetailJob: Job? = null
+
+  private val savedCatalogState =
     combine(
       loadState,
+      extraSavedCatalog,
+      preferencesRepository.savedIds,
+    ) { feedState, extraCatalog, savedIds ->
+      latestSavedIdsSnapshot = savedIds
+      val feed = (feedState as? FeedLoadState.Success)?.feed
+      val feedSaved = feed?.allUnique?.filter { it.id in savedIds }.orEmpty()
+      val feedSavedIds = feedSaved.mapTo(HashSet()) { it.id }
+      val extraSaved =
+        savedIds
+          .asSequence()
+          .filter { it !in feedSavedIds }
+          .mapNotNull { extraCatalog[it] }
+          .toList()
+      (feedSaved + extraSaved) to savedIds
+    }
+      .distinctUntilChanged()
+
+  private val feedControlsFlow =
+    combine(
       selectedTab,
       latestLanguageFilter,
       gridModeTabs,
-      searchQuery,
-    ) { feedState, tab, langFilter, gridTabs, query ->
-      BaseTuple(feedState, tab, langFilter, gridTabs, query)
+      savedCatalogState,
+    ) { tab, langFilter, gridTabs, savedPair ->
+      HomeFeedControlsState(
+        selectedTab = tab,
+        latestLanguageFilter = langFilter,
+        gridModeTabs = gridTabs,
+        savedItems = savedPair.first,
+        savedIds = savedPair.second,
+      )
     }
+      .distinctUntilChanged()
 
   private val overlayControls =
     combine(
       isSearchActive,
-      activeHeroIndex,
       activeDetailItem,
-      focusedPreviewItem,
       isRefreshing,
       isLayoutPickerOpen,
-    ) { arr ->
+    ) { searchOpen, detailItem, refreshing, pickerOpen ->
       OverlayTuple(
-        isSearchActive = arr[0] as Boolean,
-        activeHeroIndex = arr[1] as Int,
-        activeDetailItem = arr[2] as AnimeItem?,
-        focusedPreviewItem = arr[3] as AnimeItem?,
-        isRefreshing = arr[4] as Boolean,
-        isLayoutPickerOpen = arr[5] as Boolean,
+        isSearchActive = searchOpen,
+        activeDetailItem = detailItem,
+        isRefreshing = refreshing,
+        isLayoutPickerOpen = pickerOpen,
       )
     }
 
   val uiState: StateFlow<HomeScreenUiState> =
     combine(
-      baseControls,
+      loadState,
+      feedControlsFlow,
       overlayControls,
-      preferencesRepository.savedIds,
       preferencesRepository.layoutOverride,
-    ) { base, overlay, savedIds, layoutOverride ->
-      val feed = (base.loadState as? FeedLoadState.Success)?.feed
-      val q = base.searchQuery.trim().lowercase()
-      val searchResults =
-        if (feed != null && q.isNotEmpty()) {
-          feed.allUnique.filter { item ->
-            item.title.lowercase().contains(q) ||
-              item.typeLabel.lowercase().contains(q) ||
-              (item.seasonLabel?.lowercase()?.contains(q) == true)
-          }
-        } else {
-          emptyList()
-        }
-      val savedItems =
-        if (feed != null && savedIds.isNotEmpty()) {
-          feed.allUnique.filter { it.id in savedIds }
-        } else {
-          emptyList()
-        }
-      val defaultPreview = overlay.focusedPreviewItem ?: feed?.hero?.firstOrNull()
-
+    ) { feedState, feedControls, overlay, layoutOverride ->
       HomeScreenUiState(
-        loadState = base.loadState,
-        selectedTab = base.selectedTab,
-        latestLanguageFilter = base.latestLanguageFilter,
-        gridModeTabs = base.gridModeTabs,
-        searchQuery = base.searchQuery,
+        loadState = feedState,
+        feedControls = feedControls,
         isSearchActive = overlay.isSearchActive,
-        searchResults = searchResults,
-        savedItems = savedItems,
-        savedIds = savedIds,
-        activeHeroIndex = overlay.activeHeroIndex,
         activeDetailItem = overlay.activeDetailItem,
-        focusedPreviewItem = defaultPreview,
         layoutOverride = layoutOverride,
         isRefreshing = overlay.isRefreshing,
         isLayoutPickerOpen = overlay.isLayoutPickerOpen,
@@ -161,8 +177,8 @@ class HomeViewModel(
       runCatching { repository.fetchHomeFeed() }
         .onSuccess { feed ->
           loadState.value = FeedLoadState.Success(feed)
-          if (focusedPreviewItem.value == null) {
-            focusedPreviewItem.value = feed.hero.firstOrNull()
+          if (_focusedPreviewItem.value == null) {
+            _focusedPreviewItem.value = feed.hero.firstOrNull()
           }
         }
         .onFailure { err ->
@@ -185,37 +201,66 @@ class HomeViewModel(
 
   fun setSectionGridMode(tab: AnimeSectionTab, gridMode: Boolean) {
     val current = gridModeTabs.value.toMutableSet()
-    if (gridMode) current.add(tab) else current.remove(tab)
-    gridModeTabs.value = current
+    val changed = if (gridMode) current.add(tab) else current.remove(tab)
+    if (changed) {
+      gridModeTabs.value = current
+    }
   }
 
   fun toggleSearch(open: Boolean) {
     isSearchActive.value = open
-    if (!open) searchQuery.value = ""
-  }
-
-  fun updateSearchQuery(query: String) {
-    searchQuery.value = query
   }
 
   fun setActiveHeroIndex(index: Int) {
-    activeHeroIndex.value = index
+    currentHeroIndex = index
   }
 
   fun openDetail(item: AnimeItem) {
+    activeDetailJob?.cancel()
     activeDetailItem.value = item
-    focusedPreviewItem.value = item
+    _focusedPreviewItem.value = item
+
+    val enricher = searchRepository ?: return
+    val needsDetailEnrichment = item.overview.isBlank() || item.sourceProvider != null
+    if (!needsDetailEnrichment) return
+
+    activeDetailJob =
+      viewModelScope.launch {
+        try {
+          val enriched = enricher.enrichDetailItem(item)
+          if (activeDetailItem.value?.uid == item.uid) {
+            activeDetailItem.value = enriched
+            if (_focusedPreviewItem.value?.uid == item.uid) {
+              _focusedPreviewItem.value = enriched
+            }
+            if (enriched.id.isNotBlank() && enriched.id in latestSavedIdsSnapshot) {
+              extraSavedCatalog.value = extraSavedCatalog.value + (enriched.id to enriched)
+            }
+          }
+        } catch (e: CancellationException) {
+          throw e
+        } catch (_: Throwable) {
+          // Keep instant fallback metadata when optional detail enrichment fails.
+        }
+      }
   }
 
   fun closeDetail() {
+    activeDetailJob?.cancel()
+    activeDetailJob = null
     activeDetailItem.value = null
   }
 
   fun setFocusedPreview(item: AnimeItem) {
-    focusedPreviewItem.value = item
+    if (_focusedPreviewItem.value?.uid != item.uid || _focusedPreviewItem.value != item) {
+      _focusedPreviewItem.value = item
+    }
   }
 
   fun toggleSaved(item: AnimeItem) {
+    if (item.id.isNotBlank() && extraSavedCatalog.value[item.id] != item) {
+      extraSavedCatalog.value = extraSavedCatalog.value + (item.id to item)
+    }
     viewModelScope.launch { preferencesRepository.toggleSaved(item.id) }
   }
 
@@ -230,19 +275,9 @@ class HomeViewModel(
     }
   }
 
-  private data class BaseTuple(
-    val loadState: FeedLoadState,
-    val selectedTab: AnimeSectionTab,
-    val latestLanguageFilter: LatestLanguageFilter,
-    val gridModeTabs: Set<AnimeSectionTab>,
-    val searchQuery: String,
-  )
-
   private data class OverlayTuple(
     val isSearchActive: Boolean,
-    val activeHeroIndex: Int,
     val activeDetailItem: AnimeItem?,
-    val focusedPreviewItem: AnimeItem?,
     val isRefreshing: Boolean,
     val isLayoutPickerOpen: Boolean,
   )
@@ -250,10 +285,11 @@ class HomeViewModel(
   class Factory(
     private val repository: AnimeHomeRepository,
     private val preferencesRepository: UserPreferencesRepository,
+    private val searchRepository: SearchRepository? = null,
   ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-      return HomeViewModel(repository, preferencesRepository) as T
+      return HomeViewModel(repository, preferencesRepository, searchRepository) as T
     }
   }
 }

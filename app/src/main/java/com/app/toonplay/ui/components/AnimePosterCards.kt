@@ -2,14 +2,8 @@ package com.app.toonplay.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -83,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.app.toonplay.R
 import com.app.toonplay.data.model.AnimeItem
 import com.app.toonplay.ui.theme.AmberGold
@@ -143,6 +138,7 @@ fun AnimePosterCard(
   rankBadge: Int? = null,
   showActionFooter: Boolean = true,
   enableHoverLift: Boolean = false,
+  showYear: Boolean = true,
 ) {
   val context = LocalContext.current
   val imageUrl = item.posterUrl.ifBlank { item.backdropUrl }
@@ -152,6 +148,7 @@ fun AnimePosterCard(
         .data(imageUrl)
         .crossfade(false)
         .size(340, 430)
+        .precision(Precision.INEXACT)
         .build()
     }
 
@@ -164,19 +161,22 @@ fun AnimePosterCard(
 
   val cardModifier =
     if (enableHoverLift) {
+      val isReducedMotion = rememberIsReducedMotion()
       val interactionSource = remember { MutableInteractionSource() }
       val isHovered by interactionSource.collectIsHoveredAsState()
       val isFocused by interactionSource.collectIsFocusedAsState()
       val elevated = isHovered || isFocused
       val scale by
       animateFloatAsState(
-        targetValue = if (elevated) 1.035f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        targetValue = if (!isReducedMotion && elevated) 1.035f else 1f,
+        animationSpec =
+          if (isReducedMotion) snap() else spring(stiffness = Spring.StiffnessMediumLow),
         label = "poster_hover_scale",
       )
       val borderColor by
       animateColorAsState(
         targetValue = if (elevated) ToonVioletPrimary else BorderSubtle,
+        animationSpec = if (isReducedMotion) snap() else spring(),
         label = "poster_hover_border",
       )
       baseSizedModifier
@@ -282,11 +282,11 @@ fun AnimePosterCard(
           verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
           val metaLine =
-            remember(item.seasonLabel, item.episodeLabel, item.year) {
+            remember(item.seasonLabel, item.episodeLabel, item.year, showYear) {
               listOfNotNull(
                 item.seasonLabel,
                 item.episodeLabel,
-                if (item.seasonLabel == null && item.episodeLabel == null) item.year else null,
+                if (showYear && item.seasonLabel == null && item.episodeLabel == null) item.year else null,
               )
                 .joinToString("  •  ")
             }
@@ -404,10 +404,11 @@ fun FannedHeroCarousel(
   val density = LocalDensity.current
   val scope = rememberCoroutineScope()
   val isReducedMotion = rememberIsReducedMotion()
+  val autoScrollEnabled = LocalHeroAutoScrollEnabled.current.value
   val smoothSlideEasing = remember { CubicBezierEasing(0.42f, 0.0f, 0.20f, 1.0f) }
 
-  LaunchedEffect(pagerState, items.size, isReducedMotion) {
-    if (items.size <= 1 || isReducedMotion) return@LaunchedEffect
+  LaunchedEffect(pagerState, items.size, isReducedMotion, autoScrollEnabled) {
+    if (!autoScrollEnabled || items.size <= 1 || isReducedMotion) return@LaunchedEffect
     while (true) {
       snapshotFlow { pagerState.isScrollInProgress }.first { !it }
       val interruptedByScroll =
@@ -470,7 +471,7 @@ fun FannedHeroCarousel(
       } else {
         dist1Px
       }
-    val cardsPerSide = if (canShowSecondRing) 3 else 2
+    val cardsPerSide = if (canShowSecondRing) 2 else 1
 
     HorizontalPager(
       state = pagerState,
@@ -496,19 +497,14 @@ fun FannedHeroCarousel(
             .data(imageUrl)
             .crossfade(false)
             .size(480, 710)
+            .precision(Precision.INEXACT)
             .build()
         }
       val isCentered by remember(page) { derivedStateOf { page == pagerState.settledPage } }
-      val borderWidth by
-      animateDpAsState(
-        targetValue = if (isCentered) 1.5.dp else 1.dp,
-        animationSpec = tween(durationMillis = 280),
-        label = "hero_border_width",
-      )
       val borderColor by
       animateColorAsState(
         targetValue = if (isCentered) BorderBright else BorderSubtle,
-        animationSpec = tween(durationMillis = 280),
+        animationSpec = if (isReducedMotion) snap() else tween(durationMillis = 280),
         label = "hero_border_color",
       )
 
@@ -572,7 +568,7 @@ fun FannedHeroCarousel(
               .clip(HeroCardShape)
               .background(ObsidianCard)
               .border(
-                width = borderWidth,
+                width = 1.dp,
                 color = borderColor,
                 shape = HeroCardShape,
               )
@@ -680,26 +676,13 @@ fun CarouselDotIndicator(
 
 @Composable
 fun BlinkingGreenDot(modifier: Modifier = Modifier) {
-  val isReducedMotion = rememberIsReducedMotion()
-  val blinkAlpha =
-    if (isReducedMotion) {
-      1.0f
-    } else {
-      val transition = rememberInfiniteTransition(label = "latest_live_dot")
-      val animatedAlpha by
-      transition.animateFloat(
-        initialValue = 0.22f,
-        targetValue = 1.0f,
-        animationSpec =
-          infiniteRepeatable(
-            animation = tween(durationMillis = 640, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-          ),
-        label = "latest_dot_alpha",
-      )
-      animatedAlpha
-    }
-  Canvas(modifier = modifier.size(7.dp)) {
-    drawCircle(color = EmeraldLive.copy(alpha = blinkAlpha))
+  val liveAlpha = LocalLiveDotAlpha.current
+  Canvas(
+    modifier =
+      modifier
+        .size(7.dp)
+        .graphicsLayer { alpha = liveAlpha.value },
+  ) {
+    drawCircle(color = EmeraldLive)
   }
 }

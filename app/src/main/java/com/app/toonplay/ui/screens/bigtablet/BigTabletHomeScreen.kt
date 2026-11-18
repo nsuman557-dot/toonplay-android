@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -39,6 +40,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
@@ -55,29 +58,33 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.app.toonplay.R
 import com.app.toonplay.data.model.AnimeItem
 import com.app.toonplay.data.model.AnimeSectionTab
+import com.app.toonplay.data.model.DeviceFormFactor
 import com.app.toonplay.data.model.HomeFeed
 import com.app.toonplay.data.model.LatestLanguageFilter
 import com.app.toonplay.ui.components.AnimePosterCard
 import com.app.toonplay.ui.components.AnimePosterGrid
 import com.app.toonplay.ui.components.CarouselDotIndicator
 import com.app.toonplay.ui.components.FannedHeroCarousel
-import com.app.toonplay.ui.components.GlassSearchBar
 import com.app.toonplay.ui.components.HorizontalRailScrollControls
+import com.app.toonplay.ui.components.LanguageCardsRail
 import com.app.toonplay.ui.components.LatestControlsBar
 import com.app.toonplay.ui.components.MetadataPill
 import com.app.toonplay.ui.components.ProvideSmoothBringIntoView
-import com.app.toonplay.ui.components.ResponsiveSectionGrid
+import com.app.toonplay.ui.components.SearchBarTrigger
 import com.app.toonplay.ui.components.SectionHeaderRow
 import com.app.toonplay.ui.components.StarRatingPill
 import com.app.toonplay.ui.components.ToonPlayNavItems
 import com.app.toonplay.ui.components.ToonPlayProfileView
 import com.app.toonplay.ui.components.ToonPlayWordmark
+import com.app.toonplay.ui.components.calculateCompleteGridColumns
+import com.app.toonplay.ui.components.inlinePosterGridRows
 import com.app.toonplay.ui.components.rememberIsReducedMotion
 import com.app.toonplay.ui.components.smoothMouseWheelScroll
-import com.app.toonplay.ui.state.HomeScreenUiState
+import com.app.toonplay.ui.state.HomeFeedControlsState
 import com.app.toonplay.ui.theme.BorderSubtle
 import com.app.toonplay.ui.theme.ObsidianBg
 import com.app.toonplay.ui.theme.ObsidianCard
@@ -92,32 +99,33 @@ import kotlinx.coroutines.launch
 @Composable
 fun BigTabletHomeScreen(
   feed: HomeFeed,
-  uiState: HomeScreenUiState,
+  controls: HomeFeedControlsState,
+  initialHeroIndex: Int,
   onSelectTab: (AnimeSectionTab) -> Unit,
   onSelectLanguageFilter: (LatestLanguageFilter) -> Unit,
   onToggleSectionGrid: (AnimeSectionTab, Boolean) -> Unit,
   onHeroIndexChanged: (Int) -> Unit,
   onExpandDetail: (AnimeItem) -> Unit,
   onToggleSave: (AnimeItem) -> Unit,
-  onSearchQueryChange: (String) -> Unit,
+  onToggleSearch: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val heroItems = feed.hero
   val heroCount = heroItems.size.coerceAtLeast(1)
   val virtualCount = if (heroItems.size > 1) heroCount * 400 else heroCount
   val initialPage =
-    if (heroItems.size > 1) heroCount * 200 + (uiState.activeHeroIndex % heroCount) else 0
+    if (heroItems.size > 1) heroCount * 200 + (initialHeroIndex % heroCount) else 0
 
   val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { virtualCount })
   LaunchedEffect(pagerState, heroCount) {
     snapshotFlow { pagerState.currentPage % heroCount }
       .distinctUntilChanged()
-      .collect { idx -> onHeroIndexChanged(idx) }
+      .collect { idx -> onHeroIndexChanged(itOrIdxSafe(idx)) }
   }
 
   val latestList =
-    remember(feed, uiState.latestLanguageFilter) {
-      when (uiState.latestLanguageFilter) {
+    remember(feed, controls.latestLanguageFilter) {
+      when (controls.latestLanguageFilter) {
         LatestLanguageFilter.JAP_ENG -> feed.globalLatest
         LatestLanguageFilter.HIN_TAM_TEL -> feed.latestReleases
       }
@@ -129,6 +137,7 @@ fun BigTabletHomeScreen(
   val homepageMovies = remember(feed.popularMovies) { feed.popularMovies.take(12) }
 
   val homeListState = rememberLazyListState()
+  val languageRowState = rememberLazyListState()
   val latestRowState = rememberLazyListState()
   val childhoodRowState = rememberLazyListState()
   val seriesRowState = rememberLazyListState()
@@ -157,9 +166,9 @@ fun BigTabletHomeScreen(
       ToonPlayNavItems.forEach { navItem ->
         val label = stringResource(navItem.labelRes)
         NavigationRailItem(
-          selected = uiState.selectedTab == navItem.tab,
+          selected = controls.selectedTab == navItem.tab,
           onClick = {
-            if (navItem.tab == AnimeSectionTab.HOME && uiState.selectedTab == AnimeSectionTab.HOME) {
+            if (navItem.tab == AnimeSectionTab.HOME && controls.selectedTab == AnimeSectionTab.HOME) {
               scope.launch {
                 if (isReducedMotion) {
                   homeListState.scrollToItem(0)
@@ -208,260 +217,375 @@ fun BigTabletHomeScreen(
       ) {
         ToonPlayWordmark(height = 27.dp)
         Spacer(modifier = Modifier.weight(0.15f))
-        GlassSearchBar(
-          query = uiState.searchQuery,
-          onQueryChange = onSearchQueryChange,
+        SearchBarTrigger(
+          onClick = { onToggleSearch(true) },
           modifier = Modifier.weight(1f),
+          testTag = "big_tablet_search_button",
         )
       }
 
       // Full-Width Feed (no right-side inspector pane on Big Tablet)
-      val paneMode = if (uiState.searchQuery.isNotBlank()) null else uiState.selectedTab
       Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp)) {
         Crossfade(
-          targetState = paneMode,
+          targetState = controls.selectedTab,
           animationSpec = tween(durationMillis = 150),
           label = "big_tablet_tab_crossfade",
         ) { tab ->
-          if (tab == null) {
-            AnimePosterGrid(
-              items = uiState.searchResults,
-              savedIds = uiState.savedIds,
-              onItemClick = onExpandDetail,
-              onToggleSave = onToggleSave,
-              minCellWidth = 160.dp,
-              horizontalPadding = 0.dp,
-              itemSpacing = 14.dp,
-            )
-          } else if (tab == AnimeSectionTab.HOME) {
+          if (tab == AnimeSectionTab.HOME) {
             ProvideSmoothBringIntoView(edgeMargin = 24.dp, isReducedMotion = isReducedMotion) {
-              LazyColumn(
-                state = homeListState,
-                modifier =
-                  Modifier.fillMaxSize()
-                    .smoothMouseWheelScroll(
-                      scrollableState = homeListState,
-                      orientation = Orientation.Vertical,
-                      isReducedMotion = isReducedMotion,
-                    ),
-                contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(26.dp),
-              ) {
-                if (heroItems.isNotEmpty()) {
-                  item(key = "big_tablet_hero", contentType = "hero") {
-                    BigTabletHeroBanner(
-                      heroItems = heroItems,
-                      pagerState = pagerState,
-                      onExplore = onExpandDetail,
+              BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val contentWidth = this.maxWidth
+                val latestCols =
+                  remember(contentWidth) {
+                    calculateCompleteGridColumns(contentWidth, 164.dp, 14.dp, minColumns = 1)
+                  }
+                val childhoodCols =
+                  remember(contentWidth) {
+                    calculateCompleteGridColumns(contentWidth, 160.dp, 14.dp, minColumns = 1)
+                  }
+                val railCols =
+                  remember(contentWidth) {
+                    calculateCompleteGridColumns(contentWidth, 158.dp, 14.dp, minColumns = 1)
+                  }
+                val railConfigs =
+                  remember(homepageSeries, homepageMovies) {
+                    listOf(
+                      Triple(
+                        R.string.section_popular_series,
+                        R.string.section_popular_series_sub,
+                        Triple(homepageSeries, AnimeSectionTab.SERIES, seriesRowState),
+                      ),
+                      Triple(
+                        R.string.section_popular_movies,
+                        R.string.section_popular_movies_sub,
+                        Triple(homepageMovies, AnimeSectionTab.MOVIES, moviesRowState),
+                      ),
                     )
                   }
-                }
+                val hasHero = heroItems.isNotEmpty()
 
-                // 1. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items)
-                if (homepageLatest.isNotEmpty()) {
-                  item(key = "big_tablet_latest", contentType = "rail") {
-                    val isGrid = AnimeSectionTab.LATEST in uiState.gridModeTabs
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                      SectionHeaderRow(
-                        title = stringResource(R.string.section_latest_combined),
-                        kicker = stringResource(R.string.section_latest_combined_sub),
-                        itemCount = homepageLatest.size,
+                LazyColumn(
+                  state = homeListState,
+                  modifier =
+                    Modifier.fillMaxSize()
+                      .smoothMouseWheelScroll(
+                        scrollableState = homeListState,
+                        orientation = Orientation.Vertical,
+                        isReducedMotion = isReducedMotion,
+                      ),
+                  contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
+                  verticalArrangement = Arrangement.Top,
+                ) {
+                  if (hasHero) {
+                    item(key = "big_tablet_hero", contentType = "hero") {
+                      BigTabletHeroBanner(
+                        heroItems = heroItems,
+                        pagerState = pagerState,
+                        onExplore = onExpandDetail,
                       )
-                      LatestControlsBar(
-                        selectedFilter = uiState.latestLanguageFilter,
-                        onSelectFilter = onSelectLanguageFilter,
-                        onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
-                        isGridMode = isGrid,
-                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
-                        trailingLeadingControls =
-                          if (!isGrid) {
-                            {
+                    }
+                  }
+
+                  // 1. Explore by Language (9 sliding 2:1 banner cards)
+                  item(key = "big_tablet_language_cards", contentType = "language_rail") {
+                    val latestItemIndex = if (hasHero) 2 else 1
+                    LanguageCardsRail(
+                      formFactor = DeviceFormFactor.BIG_TABLET,
+                      listState = languageRowState,
+                      horizontalPadding = 0.dp,
+                      itemSpacing = 8.dp,
+                      sectionSpacing = 12.dp,
+                      showScrollControls = true,
+                      isReducedMotion = isReducedMotion,
+                      testTagPrefix = "big_tablet_languages",
+                      modifier = Modifier.padding(top = if (hasHero) 26.dp else 0.dp),
+                      onCardClick = { card ->
+                        onSelectLanguageFilter(card.latestFilter)
+                        scope.launch {
+                          if (isReducedMotion) {
+                            homeListState.scrollToItem(latestItemIndex)
+                          } else {
+                            homeListState.animateScrollToItem(latestItemIndex)
+                          }
+                        }
+                      },
+                    )
+                  }
+
+                  // 2. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items)
+                  if (homepageLatest.isNotEmpty()) {
+                    val isGrid = AnimeSectionTab.LATEST in controls.gridModeTabs
+                    if (isGrid) {
+                      item(key = "big_tablet_latest_header", contentType = "section_header") {
+                        Column(
+                          modifier = Modifier.padding(top = 26.dp),
+                          verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                          SectionHeaderRow(
+                            title = stringResource(R.string.section_latest_combined),
+                            kicker = stringResource(R.string.section_latest_combined_sub),
+                            itemCount = homepageLatest.size,
+                          )
+                          LatestControlsBar(
+                            selectedFilter = controls.latestLanguageFilter,
+                            onSelectFilter = onSelectLanguageFilter,
+                            onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
+                            isGridMode = true,
+                            onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
+                            trailingLeadingControls = null,
+                          )
+                        }
+                      }
+                      inlinePosterGridRows(
+                        sectionKey = "big_tablet_latest",
+                        items = homepageLatest,
+                        columns = latestCols,
+                        cardWidth = 164.dp,
+                        itemSpacing = 14.dp,
+                        horizontalPadding = 0.dp,
+                        firstRowTopPadding = 12.dp,
+                        rowKeyPrefix = { it.uid },
+                      ) { _, item, cellModifier ->
+                        AnimePosterCard(
+                          item = item,
+                          onClick = { onExpandDetail(item) },
+                          width = null,
+                          isSaved = item.id in controls.savedIds,
+                          onToggleSave = { onToggleSave(item) },
+                          showActionFooter = true,
+                          modifier = cellModifier,
+                        )
+                      }
+                    } else {
+                      item(key = "big_tablet_latest", contentType = "rail") {
+                        Column(
+                          modifier = Modifier.padding(top = 26.dp),
+                          verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                          SectionHeaderRow(
+                            title = stringResource(R.string.section_latest_combined),
+                            kicker = stringResource(R.string.section_latest_combined_sub),
+                            itemCount = homepageLatest.size,
+                          )
+                          LatestControlsBar(
+                            selectedFilter = controls.latestLanguageFilter,
+                            onSelectFilter = onSelectLanguageFilter,
+                            onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
+                            isGridMode = false,
+                            onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
+                            trailingLeadingControls = {
                               HorizontalRailScrollControls(
                                 listState = latestRowState,
                                 stepDistance = 356.dp,
                                 isReducedMotion = isReducedMotion,
                                 testTagPrefix = "big_tablet_latest",
                               )
-                            }
-                          } else null,
-                      )
-                      if (isGrid) {
-                        BigTabletSectionInlineGrid(
-                          items = homepageLatest,
-                          savedIds = uiState.savedIds,
-                          cardWidth = 164.dp,
-                          showRank = false,
-                          onItemClick = onExpandDetail,
-                          onToggleSave = onToggleSave,
-                        )
-                      } else {
-                        LazyRow(
-                          state = latestRowState,
-                          horizontalArrangement = Arrangement.spacedBy(14.dp),
-                          modifier =
-                            Modifier.smoothMouseWheelScroll(
-                              scrollableState = latestRowState,
-                              orientation = Orientation.Horizontal,
-                              isReducedMotion = isReducedMotion,
-                            ),
-                        ) {
-                          items(
-                            items = homepageLatest,
-                            key = { it.uid },
-                            contentType = { "unified_card" },
-                          ) { item ->
-                            AnimePosterCard(
-                              item = item,
-                              onClick = { onExpandDetail(item) },
-                              width = 164.dp,
-                              isSaved = item.id in uiState.savedIds,
-                              onToggleSave = { onToggleSave(item) },
-                              showActionFooter = true,
-                            )
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-
-                // 2. Childhood Shows (max 12 items)
-                if (homepageChildhood.isNotEmpty()) {
-                  item(key = "big_tablet_childhood", contentType = "rail") {
-                    val isGrid = AnimeSectionTab.CHILDHOOD in uiState.gridModeTabs
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                      SectionHeaderRow(
-                        title = stringResource(R.string.section_childhood_shows),
-                        kicker = stringResource(R.string.section_childhood_shows_sub),
-                        itemCount = homepageChildhood.size,
-                        onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
-                        isGridMode = isGrid,
-                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
-                        trailingLeadingControls =
-                          if (!isGrid) {
-                            {
-                              HorizontalRailScrollControls(
-                                listState = childhoodRowState,
-                                stepDistance = 348.dp,
-                                isReducedMotion = isReducedMotion,
-                                testTagPrefix = "big_tablet_childhood",
-                              )
-                            }
-                          } else null,
-                      )
-                      if (isGrid) {
-                        BigTabletSectionInlineGrid(
-                          items = homepageChildhood,
-                          savedIds = uiState.savedIds,
-                          cardWidth = 160.dp,
-                          showRank = true,
-                          onItemClick = onExpandDetail,
-                          onToggleSave = onToggleSave,
-                        )
-                      } else {
-                        LazyRow(
-                          state = childhoodRowState,
-                          horizontalArrangement = Arrangement.spacedBy(14.dp),
-                          modifier =
-                            Modifier.smoothMouseWheelScroll(
-                              scrollableState = childhoodRowState,
-                              orientation = Orientation.Horizontal,
-                              isReducedMotion = isReducedMotion,
-                            ),
-                        ) {
-                          itemsIndexed(
-                            items = homepageChildhood,
-                            key = { _, it -> it.uid },
-                            contentType = { _, _ -> "unified_card" },
-                          ) { idx, item ->
-                            AnimePosterCard(
-                              item = item,
-                              onClick = { onExpandDetail(item) },
-                              width = 160.dp,
-                              isSaved = item.id in uiState.savedIds,
-                              onToggleSave = { onToggleSave(item) },
-                              rankBadge = idx + 1,
-                              showActionFooter = true,
-                            )
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-
-                // 3. Most Popular TV Series & 4. Blockbuster Anime Movies (max 12 items)
-                val railConfigs =
-                  listOf(
-                    Triple(
-                      R.string.section_popular_series,
-                      R.string.section_popular_series_sub,
-                      Triple(homepageSeries, AnimeSectionTab.SERIES, seriesRowState),
-                    ),
-                    Triple(
-                      R.string.section_popular_movies,
-                      R.string.section_popular_movies_sub,
-                      Triple(homepageMovies, AnimeSectionTab.MOVIES, moviesRowState),
-                    ),
-                  )
-                railConfigs.forEach { (titleRes, subRes, triple) ->
-                  val (list, tab, rowState) = triple
-                  if (list.isNotEmpty()) {
-                    item(key = "big_tablet_${tab.name}", contentType = "rail") {
-                      val isGrid = tab in uiState.gridModeTabs
-                      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeaderRow(
-                          title = stringResource(titleRes),
-                          kicker = stringResource(subRes),
-                          itemCount = list.size,
-                          onSeeAll = { onSelectTab(tab) },
-                          isGridMode = isGrid,
-                          onToggleGridMode = { onToggleSectionGrid(tab, it) },
-                          trailingLeadingControls =
-                            if (!isGrid) {
-                              {
-                                HorizontalRailScrollControls(
-                                  listState = rowState,
-                                  stepDistance = 344.dp,
-                                  isReducedMotion = isReducedMotion,
-                                  testTagPrefix = "big_tablet_${tab.name.lowercase()}",
-                                )
-                              }
-                            } else null,
-                        )
-                        if (isGrid) {
-                          BigTabletSectionInlineGrid(
-                            items = list,
-                            savedIds = uiState.savedIds,
-                            cardWidth = 158.dp,
-                            showRank = false,
-                            onItemClick = onExpandDetail,
-                            onToggleSave = onToggleSave,
+                            },
                           )
-                        } else {
                           LazyRow(
-                            state = rowState,
+                            state = latestRowState,
                             horizontalArrangement = Arrangement.spacedBy(14.dp),
                             modifier =
                               Modifier.smoothMouseWheelScroll(
-                                scrollableState = rowState,
+                                scrollableState = latestRowState,
                                 orientation = Orientation.Horizontal,
                                 isReducedMotion = isReducedMotion,
                               ),
                           ) {
                             items(
-                              items = list,
+                              items = homepageLatest,
                               key = { it.uid },
                               contentType = { "unified_card" },
                             ) { item ->
                               AnimePosterCard(
                                 item = item,
                                 onClick = { onExpandDetail(item) },
-                                width = 158.dp,
-                                isSaved = item.id in uiState.savedIds,
+                                width = 164.dp,
+                                isSaved = item.id in controls.savedIds,
                                 onToggleSave = { onToggleSave(item) },
                                 showActionFooter = true,
                               )
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // 3. Childhood Shows (max 12 items)
+                  if (homepageChildhood.isNotEmpty()) {
+                    val isGrid = AnimeSectionTab.CHILDHOOD in controls.gridModeTabs
+                    if (isGrid) {
+                      item(key = "big_tablet_childhood_header", contentType = "section_header") {
+                        SectionHeaderRow(
+                          title = stringResource(R.string.section_childhood_shows),
+                          kicker = stringResource(R.string.section_childhood_shows_sub),
+                          itemCount = homepageChildhood.size,
+                          onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
+                          isGridMode = true,
+                          onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
+                          trailingLeadingControls = null,
+                          modifier = Modifier.padding(top = 26.dp),
+                        )
+                      }
+                      inlinePosterGridRows(
+                        sectionKey = "big_tablet_childhood",
+                        items = homepageChildhood,
+                        columns = childhoodCols,
+                        cardWidth = 160.dp,
+                        itemSpacing = 14.dp,
+                        horizontalPadding = 0.dp,
+                        firstRowTopPadding = 12.dp,
+                        rowKeyPrefix = { it.uid },
+                      ) { flatIndex, item, cellModifier ->
+                        AnimePosterCard(
+                          item = item,
+                          onClick = { onExpandDetail(item) },
+                          width = null,
+                          isSaved = item.id in controls.savedIds,
+                          onToggleSave = { onToggleSave(item) },
+                          rankBadge = flatIndex + 1,
+                          showActionFooter = true,
+                          modifier = cellModifier,
+                        )
+                      }
+                    } else {
+                      item(key = "big_tablet_childhood", contentType = "rail") {
+                        Column(
+                          modifier = Modifier.padding(top = 26.dp),
+                          verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                          SectionHeaderRow(
+                            title = stringResource(R.string.section_childhood_shows),
+                            kicker = stringResource(R.string.section_childhood_shows_sub),
+                            itemCount = homepageChildhood.size,
+                            onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
+                            isGridMode = false,
+                            onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
+                            trailingLeadingControls = {
+                              HorizontalRailScrollControls(
+                                listState = childhoodRowState,
+                                stepDistance = 348.dp,
+                                isReducedMotion = isReducedMotion,
+                                testTagPrefix = "big_tablet_childhood",
+                              )
+                            },
+                          )
+                          LazyRow(
+                            state = childhoodRowState,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            modifier =
+                              Modifier.smoothMouseWheelScroll(
+                                scrollableState = childhoodRowState,
+                                orientation = Orientation.Horizontal,
+                                isReducedMotion = isReducedMotion,
+                              ),
+                          ) {
+                            itemsIndexed(
+                              items = homepageChildhood,
+                              key = { _, it -> it.uid },
+                              contentType = { _, _ -> "unified_card" },
+                            ) { idx, item ->
+                              AnimePosterCard(
+                                item = item,
+                                onClick = { onExpandDetail(item) },
+                                width = 160.dp,
+                                isSaved = item.id in controls.savedIds,
+                                onToggleSave = { onToggleSave(item) },
+                                rankBadge = idx + 1,
+                                showActionFooter = true,
+                              )
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // 4. Most Popular TV Series & 5. Blockbuster Anime Movies (max 12 items)
+                  railConfigs.forEach { (titleRes, subRes, triple) ->
+                    val (list, tabItem, rowState) = triple
+                    if (list.isNotEmpty()) {
+                      val isGrid = tabItem in controls.gridModeTabs
+                      if (isGrid) {
+                        item(key = "big_tablet_header_${tabItem.name}", contentType = "section_header") {
+                          SectionHeaderRow(
+                            title = stringResource(titleRes),
+                            kicker = stringResource(subRes),
+                            itemCount = list.size,
+                            onSeeAll = { onSelectTab(tabItem) },
+                            isGridMode = true,
+                            onToggleGridMode = { onToggleSectionGrid(tabItem, it) },
+                            trailingLeadingControls = null,
+                            modifier = Modifier.padding(top = 26.dp),
+                          )
+                        }
+                        inlinePosterGridRows(
+                          sectionKey = "big_tablet_${tabItem.name.lowercase()}",
+                          items = list,
+                          columns = railCols,
+                          cardWidth = 158.dp,
+                          itemSpacing = 14.dp,
+                          horizontalPadding = 0.dp,
+                          firstRowTopPadding = 12.dp,
+                          rowKeyPrefix = { it.uid },
+                        ) { _, item, cellModifier ->
+                          AnimePosterCard(
+                            item = item,
+                            onClick = { onExpandDetail(item) },
+                            width = null,
+                            isSaved = item.id in controls.savedIds,
+                            onToggleSave = { onToggleSave(item) },
+                            showActionFooter = true,
+                            modifier = cellModifier,
+                          )
+                        }
+                      } else {
+                        item(key = "big_tablet_${tabItem.name}", contentType = "rail") {
+                          Column(
+                            modifier = Modifier.padding(top = 26.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                          ) {
+                            SectionHeaderRow(
+                              title = stringResource(titleRes),
+                              kicker = stringResource(subRes),
+                              itemCount = list.size,
+                              onSeeAll = { onSelectTab(tabItem) },
+                              isGridMode = false,
+                              onToggleGridMode = { onToggleSectionGrid(tabItem, it) },
+                              trailingLeadingControls = {
+                                HorizontalRailScrollControls(
+                                  listState = rowState,
+                                  stepDistance = 344.dp,
+                                  isReducedMotion = isReducedMotion,
+                                  testTagPrefix = "big_tablet_${tabItem.name.lowercase()}",
+                                )
+                              },
+                            )
+                            LazyRow(
+                              state = rowState,
+                              horizontalArrangement = Arrangement.spacedBy(14.dp),
+                              modifier =
+                                Modifier.smoothMouseWheelScroll(
+                                  scrollableState = rowState,
+                                  orientation = Orientation.Horizontal,
+                                  isReducedMotion = isReducedMotion,
+                                ),
+                            ) {
+                              items(
+                                items = list,
+                                key = { it.uid },
+                                contentType = { "unified_card" },
+                              ) { item ->
+                                AnimePosterCard(
+                                  item = item,
+                                  onClick = { onExpandDetail(item) },
+                                  width = 158.dp,
+                                  isSaved = item.id in controls.savedIds,
+                                  onToggleSave = { onToggleSave(item) },
+                                  showActionFooter = true,
+                                )
+                              }
                             }
                           }
                         }
@@ -474,9 +598,9 @@ fun BigTabletHomeScreen(
           } else if (tab == AnimeSectionTab.PROFILE) {
             ToonPlayProfileView(
               feed = feed,
-              savedItems = uiState.savedItems,
-              savedIds = uiState.savedIds,
-              selectedLanguageFilter = uiState.latestLanguageFilter,
+              savedItems = controls.savedItems,
+              savedIds = controls.savedIds,
+              selectedLanguageFilter = controls.latestLanguageFilter,
               onSelectLanguageFilter = onSelectLanguageFilter,
               onItemClick = onExpandDetail,
               onToggleSave = onToggleSave,
@@ -493,13 +617,13 @@ fun BigTabletHomeScreen(
                 AnimeSectionTab.CHILDHOOD -> feed.childhoodShows
                 AnimeSectionTab.SERIES -> feed.popularSeries
                 AnimeSectionTab.MOVIES -> feed.popularMovies
-                AnimeSectionTab.SAVED -> uiState.savedItems
+                AnimeSectionTab.SAVED -> controls.savedItems
                 AnimeSectionTab.HOME,
                 AnimeSectionTab.PROFILE -> emptyList()
               }
             AnimePosterGrid(
               items = items,
-              savedIds = uiState.savedIds,
+              savedIds = controls.savedIds,
               onItemClick = onExpandDetail,
               onToggleSave = onToggleSave,
               minCellWidth = 160.dp,
@@ -513,34 +637,7 @@ fun BigTabletHomeScreen(
   }
 }
 
-@Composable
-private fun BigTabletSectionInlineGrid(
-  items: List<AnimeItem>,
-  savedIds: Set<String>,
-  cardWidth: Dp,
-  showRank: Boolean,
-  onItemClick: (AnimeItem) -> Unit,
-  onToggleSave: (AnimeItem) -> Unit,
-) {
-  ResponsiveSectionGrid(
-    items = items,
-    cardWidth = cardWidth,
-    itemSpacing = 14.dp,
-    horizontalPadding = 0.dp,
-  ) { flatIndex, item, cellModifier ->
-    val rank = if (showRank) flatIndex + 1 else null
-    AnimePosterCard(
-      item = item,
-      onClick = { onItemClick(item) },
-      width = null,
-      isSaved = item.id in savedIds,
-      onToggleSave = { onToggleSave(item) },
-      rankBadge = rank,
-      showActionFooter = true,
-      modifier = cellModifier,
-    )
-  }
-}
+private inline fun itOrIdxSafe(idx: Int): Int = idx
 
 @Composable
 private fun BigTabletHeroBanner(
@@ -549,7 +646,10 @@ private fun BigTabletHeroBanner(
   onExplore: (AnimeItem) -> Unit,
 ) {
   val context = LocalContext.current
-  val activeHero = heroItems[pagerState.currentPage % heroItems.size]
+  val currentHeroIndex by remember(heroItems, pagerState) {
+    derivedStateOf { pagerState.currentPage % heroItems.size }
+  }
+  val activeHero = heroItems[currentHeroIndex]
   val backdropUrl = activeHero.backdropUrl.ifBlank { activeHero.posterUrl }
   val backdropRequest =
     remember(backdropUrl) {
@@ -557,6 +657,7 @@ private fun BigTabletHeroBanner(
         .data(backdropUrl)
         .crossfade(false)
         .size(960, 540)
+        .precision(Precision.INEXACT)
         .build()
     }
   val bannerGradient =
@@ -658,7 +759,7 @@ private fun BigTabletHeroBanner(
           Spacer(modifier = Modifier.height(10.dp))
           CarouselDotIndicator(
             count = heroItems.size,
-            currentIndex = pagerState.currentPage % heroItems.size,
+            currentIndex = currentHeroIndex,
           )
         }
       }

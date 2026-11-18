@@ -15,6 +15,19 @@
     <string name="nav_favorites">Watchlist</string>
 
     <!-- Sections matching ToonPlay.in order -->
+    <string name="section_languages_title">Watch in Your Language</string>
+    <string name="section_languages_sub">Audio &amp; Dub Collections</string>
+    <string name="section_languages_sub_count">Audio &amp; Dub Collections  •  %1$d items</string>
+    <string name="lang_card_hindi">Hindi</string>
+    <string name="lang_card_telugu">Telugu</string>
+    <string name="lang_card_tamil">Tamil</string>
+    <string name="lang_card_malayalam">Malayalam</string>
+    <string name="lang_card_kannada">Kannada</string>
+    <string name="lang_card_bengali">Bengali</string>
+    <string name="lang_card_english">English</string>
+    <string name="lang_card_japanese">Japanese</string>
+    <string name="lang_card_korean">Korean</string>
+
     <string name="section_latest_combined">Latest Episodes &amp; Releases</string>
     <string name="section_latest_combined_sub">Fresh Releases</string>
     <string name="lang_jap_eng">JAP/ENG</string>
@@ -83,4 +96,24 @@
     <string name="cd_share">Share title</string>
     <string name="cd_scroll_left">Scroll left</string>
     <string name="cd_scroll_right">Scroll right</string>
+
+    <!-- Modern Search -->
+    <string name="search_trending_heading">Trending Now</string>
+    <string name="search_trending_subtitle">Top Movies &amp; Popular Series</string>
+    <string name="search_trending_movies_subtitle">Top Movies</string>
+    <string name="search_trending_series_subtitle">Popular Series</string>
+    <string name="search_results_heading">Search Results</string>
+    <string name="search_filter_all">All</string>
+    <string name="search_filter_movies">Movies</string>
+    <string name="search_filter_series">Series</string>
+    <string name="search_clear_action">Clear Search</string>
+    <string name="search_show_all_action">Show All</string>
+    <string name="search_empty_trending_subtitle">No trending titles match this filter right now.</string>
+    <string name="search_empty_query_subtitle">No titles match \"%1$s\". Try another keyword or switch filters.</string>
+    <string name="search_results_count_singular">%1$d matching title</string>
+    <string name="search_results_count_plural">%1$d matching titles</string>
+    <string name="search_titles_count_singular">%1$d title</string>
+    <string name="search_titles_count_plural">%1$d titles</string>
+    <string name="search_searching_subtitle">\"%1$s\"  •  Searching…</string>
+    <string name="search_partial_warning">Some catalog sources did not respond. Showing available results.</string>
 </resources>

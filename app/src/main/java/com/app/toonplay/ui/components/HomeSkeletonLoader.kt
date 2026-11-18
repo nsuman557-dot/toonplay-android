@@ -45,6 +45,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -58,7 +59,10 @@ import com.app.toonplay.ui.theme.ObsidianGlass
 import com.app.toonplay.ui.theme.ObsidianSurface
 
 @Composable
-private fun rememberSkeletonBrush(): Brush {
+fun rememberSkeletonBrush(): Brush {
+  if (rememberIsReducedMotion()) {
+    return SolidColor(ObsidianElevated)
+  }
   val transition = rememberInfiniteTransition(label = "home_skeleton_shimmer")
   val shift by
   transition.animateFloat(
@@ -94,6 +98,85 @@ private fun SkeletonBox(
   Box(
     modifier = modifier.clip(shape).background(brush).border(0.6.dp, BorderSubtle.copy(alpha = 0.5f), shape)
   )
+}
+
+@Composable
+fun SearchPosterSkeletonCard(
+  brush: Brush,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    shape = RoundedCornerShape(16.dp),
+    color = ObsidianCard,
+    border = BorderStroke(1.dp, BorderSubtle),
+    modifier = modifier,
+  ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+      Box(
+        modifier = Modifier.fillMaxWidth().aspectRatio(0.79f),
+      ) {
+        SkeletonBox(
+          brush = brush,
+          modifier = Modifier.fillMaxSize(),
+          shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        )
+        // Top-right type badge placeholder matching AnimePosterCard
+        Box(
+          modifier =
+            Modifier.align(Alignment.TopEnd)
+              .padding(8.dp)
+              .size(width = 56.dp, height = 20.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(ObsidianGlass)
+              .border(0.8.dp, BorderSubtle.copy(alpha = 0.7f), RoundedCornerShape(8.dp)),
+        )
+        // Bottom title & meta placeholder lines matching AnimePosterCard
+        Column(
+          modifier =
+            Modifier.align(Alignment.BottomStart)
+              .fillMaxWidth()
+              .padding(horizontal = 10.dp, vertical = 8.dp),
+          verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+          Box(
+            modifier =
+              Modifier.fillMaxWidth(0.84f)
+                .height(13.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(ObsidianElevated.copy(alpha = 0.85f)),
+          )
+          Box(
+            modifier =
+              Modifier.fillMaxWidth(0.56f)
+                .height(13.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(ObsidianElevated.copy(alpha = 0.7f)),
+          )
+        }
+      }
+      HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 10.dp),
+        thickness = 1.dp,
+        color = Color.White.copy(alpha = 0.14f),
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        SkeletonBox(
+          brush = brush,
+          modifier = Modifier.weight(1f).height(31.dp),
+          shape = RoundedCornerShape(9.dp),
+        )
+        SkeletonBox(
+          brush = brush,
+          modifier = Modifier.size(31.dp),
+          shape = RoundedCornerShape(9.dp),
+        )
+      }
+    }
+  }
 }
 
 @Composable
@@ -155,6 +238,14 @@ private fun MobileHomeSkeleton(brush: Brush) {
         }
       }
 
+      item {
+        LanguageRailSkeleton(
+          brush = brush,
+          formFactor = DeviceFormFactor.MOBILE,
+          horizontalPadding = 16.dp,
+          itemSpacing = 6.dp,
+        )
+      }
       item {
         SectionRowSkeleton(
           brush = brush,
@@ -283,6 +374,15 @@ private fun TabletHomeSkeleton(brush: Brush) {
           )
         }
         item {
+          LanguageRailSkeleton(
+            brush = brush,
+            formFactor = DeviceFormFactor.TABLET,
+            horizontalPadding = 24.dp,
+            itemSpacing = 8.dp,
+            showScrollControls = true,
+          )
+        }
+        item {
           SectionRowSkeleton(
             brush = brush,
             cardWidth = 164.dp,
@@ -336,6 +436,15 @@ private fun BigTabletHomeSkeleton(brush: Brush) {
             height = 340.dp,
             carouselOnLeft = false,
             showDotsUnderCarousel = true,
+          )
+        }
+        item {
+          LanguageRailSkeleton(
+            brush = brush,
+            formFactor = DeviceFormFactor.BIG_TABLET,
+            horizontalPadding = 0.dp,
+            itemSpacing = 8.dp,
+            showScrollControls = true,
           )
         }
         item {
@@ -419,6 +528,15 @@ private fun DesktopHomeSkeleton(brush: Brush) {
           )
         }
         item {
+          LanguageRailSkeleton(
+            brush = brush,
+            formFactor = DeviceFormFactor.DESKTOP,
+            horizontalPadding = 0.dp,
+            itemSpacing = 10.dp,
+            showScrollControls = true,
+          )
+        }
+        item {
           SectionRowSkeleton(
             brush = brush,
             cardWidth = 168.dp,
@@ -493,6 +611,15 @@ private fun TvHomeSkeleton(brush: Brush) {
             carouselOnLeft = false,
             showDotsNextToButton = true,
             leftWeight = 0.52f,
+          )
+        }
+        item {
+          LanguageRailSkeleton(
+            brush = brush,
+            formFactor = DeviceFormFactor.TV,
+            horizontalPadding = 42.dp,
+            itemSpacing = 10.dp,
+            sectionSpacing = 14.dp,
           )
         }
         item {
@@ -670,13 +797,12 @@ private fun SectionRowSkeleton(
       }
       if (inlineTvLatestControls) {
         Row(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          SkeletonBox(brush = brush, modifier = Modifier.width(84.dp).height(34.dp), shape = RoundedCornerShape(12.dp))
-          SkeletonBox(brush = brush, modifier = Modifier.width(106.dp).height(34.dp), shape = RoundedCornerShape(12.dp))
+          SkeletonBox(brush = brush, modifier = Modifier.width(196.dp).height(42.dp), shape = RoundedCornerShape(12.dp))
+          SkeletonBox(brush = brush, modifier = Modifier.width(82.dp).height(42.dp), shape = RoundedCornerShape(12.dp))
           SkeletonBox(brush = brush, modifier = Modifier.width(78.dp).height(34.dp), shape = RoundedCornerShape(12.dp))
-          SkeletonBox(brush = brush, modifier = Modifier.width(76.dp).height(34.dp), shape = RoundedCornerShape(12.dp))
         }
       } else if (showHeaderActions) {
         Row(
@@ -736,6 +862,78 @@ private fun SectionRowSkeleton(
               SkeletonBox(brush = brush, modifier = Modifier.size(31.dp), shape = RoundedCornerShape(9.dp))
             }
           }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun LanguageRailSkeleton(
+  brush: Brush,
+  formFactor: DeviceFormFactor,
+  horizontalPadding: Dp,
+  itemSpacing: Dp,
+  sectionSpacing: Dp = 12.dp,
+  showScrollControls: Boolean = false,
+) {
+  BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+    val cardWidth =
+      calculateResponsiveLanguageCardWidth(
+        formFactor = formFactor,
+        availableWidth = this.maxWidth,
+      )
+    Column(verticalArrangement = Arrangement.spacedBy(sectionSpacing)) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalPadding),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom,
+      ) {
+        Column(
+          modifier = Modifier.weight(1f),
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          SkeletonBox(
+            brush = brush,
+            modifier = Modifier.width(156.dp).height(13.dp),
+            shape = CircleShape,
+          )
+          SkeletonBox(
+            brush = brush,
+            modifier = Modifier.width(224.dp).height(24.dp),
+            shape = RoundedCornerShape(6.dp),
+          )
+        }
+        if (showScrollControls) {
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            SkeletonBox(
+              brush = brush,
+              modifier = Modifier.size(32.dp),
+              shape = RoundedCornerShape(10.dp),
+            )
+            SkeletonBox(
+              brush = brush,
+              modifier = Modifier.size(32.dp),
+              shape = RoundedCornerShape(10.dp),
+            )
+          }
+        }
+      }
+
+      LazyRow(
+        userScrollEnabled = false,
+        contentPadding = PaddingValues(horizontal = horizontalPadding),
+        horizontalArrangement = Arrangement.spacedBy(itemSpacing),
+      ) {
+        items(5) {
+          SkeletonBox(
+            brush = brush,
+            modifier = Modifier.width(cardWidth).aspectRatio(LANGUAGE_CARD_ASPECT_RATIO),
+            shape = RoundedCornerShape(18.dp),
+          )
         }
       }
     }

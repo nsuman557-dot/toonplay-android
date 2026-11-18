@@ -83,6 +83,7 @@ import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.app.toonplay.R
 import com.app.toonplay.data.model.AnimeSectionTab
 import com.app.toonplay.data.model.LatestLanguageFilter
@@ -222,6 +223,7 @@ fun AmbientHeroBackdrop(
               .data(url)
               .crossfade(false)
               .size(64, 48)
+              .precision(Precision.INEXACT)
               .build()
           }
         AsyncImage(

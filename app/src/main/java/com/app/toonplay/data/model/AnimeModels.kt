@@ -19,6 +19,12 @@ enum class LatestLanguageFilter(val label: String) {
   HIN_TAM_TEL("HIN/TAM/TEL"),
 }
 
+enum class SearchFilter(val label: String) {
+  ALL("All"),
+  MOVIES("Movies"),
+  SERIES("Series"),
+}
+
 enum class DeviceFormFactor(val displayName: String) {
   MOBILE("Mobile"),
   TABLET("Tablet"),
@@ -53,6 +59,11 @@ data class AnimeItem(
   val reanimeId: String?,
   val rank: Int? = null,
   val sectionKey: String,
+  val subjectId: String? = null,
+  val detailPath: String? = null,
+  val sourceProvider: SearchSource? = null,
+  val link: String? = null,
+  val categories: List<String> = emptyList(),
 )
 
 @Immutable

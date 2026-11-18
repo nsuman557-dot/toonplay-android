@@ -65,6 +65,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.app.toonplay.R
 import com.app.toonplay.data.model.AnimeItem
 import com.app.toonplay.ui.theme.AmberGold
@@ -132,6 +133,7 @@ fun AnimeDetailModal(
                 .data(heroImageUrl)
                 .crossfade(false)
                 .size(960, 620)
+                .precision(Precision.INEXACT)
                 .build()
             }
           val modalBackdropScrim =
@@ -428,6 +430,7 @@ fun AnimeDetailInspectorPane(
             .data(inspectorUrl)
             .crossfade(false)
             .size(720, 420)
+            .precision(Precision.INEXACT)
             .build()
         }
       val inspectorScrim =

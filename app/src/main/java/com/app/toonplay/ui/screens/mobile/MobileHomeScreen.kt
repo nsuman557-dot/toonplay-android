@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -40,6 +41,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
@@ -58,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import com.app.toonplay.R
 import com.app.toonplay.data.model.AnimeItem
 import com.app.toonplay.data.model.AnimeSectionTab
+import com.app.toonplay.data.model.DeviceFormFactor
 import com.app.toonplay.data.model.HomeFeed
 import com.app.toonplay.data.model.LatestLanguageFilter
 import com.app.toonplay.ui.components.AmbientHeroBackdrop
@@ -65,19 +69,20 @@ import com.app.toonplay.ui.components.AnimePosterCard
 import com.app.toonplay.ui.components.AnimePosterGrid
 import com.app.toonplay.ui.components.CarouselDotIndicator
 import com.app.toonplay.ui.components.FannedHeroCarousel
-import com.app.toonplay.ui.components.FullScreenSearchSheet
 import com.app.toonplay.ui.components.GlassCircleIconButton
+import com.app.toonplay.ui.components.LanguageCardsRail
 import com.app.toonplay.ui.components.LatestControlsBar
 import com.app.toonplay.ui.components.ProvideSmoothBringIntoView
-import com.app.toonplay.ui.components.ResponsiveSectionGrid
 import com.app.toonplay.ui.components.SectionHeaderRow
 import com.app.toonplay.ui.components.StarRatingPill
 import com.app.toonplay.ui.components.ToonPlayNavItems
 import com.app.toonplay.ui.components.ToonPlayProfileView
 import com.app.toonplay.ui.components.ToonPlayWordmark
+import com.app.toonplay.ui.components.calculateCompleteGridColumns
+import com.app.toonplay.ui.components.inlinePosterGridRows
 import com.app.toonplay.ui.components.rememberIsReducedMotion
 import com.app.toonplay.ui.components.smoothMouseWheelScroll
-import com.app.toonplay.ui.state.HomeScreenUiState
+import com.app.toonplay.ui.state.HomeFeedControlsState
 import com.app.toonplay.ui.theme.BorderBright
 import com.app.toonplay.ui.theme.ObsidianBg
 import com.app.toonplay.ui.theme.ObsidianGlass
@@ -92,7 +97,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun MobileHomeScreen(
   feed: HomeFeed,
-  uiState: HomeScreenUiState,
+  controls: HomeFeedControlsState,
+  initialHeroIndex: Int,
   onSelectTab: (AnimeSectionTab) -> Unit,
   onSelectLanguageFilter: (LatestLanguageFilter) -> Unit,
   onToggleSectionGrid: (AnimeSectionTab, Boolean) -> Unit,
@@ -100,14 +106,13 @@ fun MobileHomeScreen(
   onItemClick: (AnimeItem) -> Unit,
   onToggleSave: (AnimeItem) -> Unit,
   onToggleSearch: (Boolean) -> Unit,
-  onSearchQueryChange: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val heroItems = feed.hero
   val heroCount = heroItems.size.coerceAtLeast(1)
   val virtualPageCount = if (heroItems.size > 1) heroCount * 400 else heroCount
   val initialVirtualPage =
-    if (heroItems.size > 1) heroCount * 200 + (uiState.activeHeroIndex % heroCount) else 0
+    if (heroItems.size > 1) heroCount * 200 + (initialHeroIndex % heroCount) else 0
 
   val pagerState =
     rememberPagerState(
@@ -121,12 +126,9 @@ fun MobileHomeScreen(
       .collect { idx -> onHeroIndexChanged(idx) }
   }
 
-  val activeHero =
-    if (heroItems.isNotEmpty()) heroItems[pagerState.currentPage % heroItems.size] else null
-
   val latestList =
-    remember(feed, uiState.latestLanguageFilter) {
-      when (uiState.latestLanguageFilter) {
+    remember(feed, controls.latestLanguageFilter) {
+      when (controls.latestLanguageFilter) {
         LatestLanguageFilter.JAP_ENG -> feed.globalLatest
         LatestLanguageFilter.HIN_TAM_TEL -> feed.latestReleases
       }
@@ -138,6 +140,7 @@ fun MobileHomeScreen(
   val homepageMovies = remember(feed.popularMovies) { feed.popularMovies.take(12) }
 
   val homeListState = rememberLazyListState()
+  val languageRowState = rememberLazyListState()
   val latestRowState = rememberLazyListState()
   val childhoodRowState = rememberLazyListState()
   val seriesRowState = rememberLazyListState()
@@ -160,152 +163,140 @@ fun MobileHomeScreen(
 
   Box(modifier = modifier.fillMaxSize().background(ObsidianBg).testTag("mobile_home_screen")) {
     Crossfade(
-      targetState = uiState.selectedTab,
+      targetState = controls.selectedTab,
       animationSpec = tween(durationMillis = 150),
       label = "mobile_tab_crossfade",
     ) { tab ->
       if (tab == AnimeSectionTab.HOME) {
         ProvideSmoothBringIntoView(edgeMargin = 16.dp, isReducedMotion = isReducedMotion) {
-          LazyColumn(
-            state = homeListState,
-            modifier =
-              Modifier.fillMaxSize()
-                .smoothMouseWheelScroll(
-                  scrollableState = homeListState,
-                  orientation = Orientation.Vertical,
-                  isReducedMotion = isReducedMotion,
+          BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val inlineGridColumns =
+              remember(this.maxWidth) {
+                calculateCompleteGridColumns(
+                  availableWidth = (this.maxWidth - 32.dp).coerceAtLeast(0.dp),
+                  cardWidth = 158.dp,
+                  spacing = 12.dp,
+                  minColumns = 1,
                 )
-                .testTag("mobile_home_feed"),
-            contentPadding = PaddingValues(bottom = bottomBarClearance),
-            verticalArrangement = Arrangement.spacedBy(26.dp),
-          ) {
-            // 1. Bidirectional Hero Fanned Carousel with scrolling ambient backdrop so header stays transparent
-            if (heroItems.isNotEmpty()) {
-              item(key = "mobile_hero_carousel", contentType = "hero") {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                  AmbientHeroBackdrop(
-                    imageUrl = activeHero?.backdropUrl ?: activeHero?.posterUrl,
-                    height = 492.dp,
+              }
+
+            LazyColumn(
+              state = homeListState,
+              modifier =
+                Modifier.fillMaxSize()
+                  .smoothMouseWheelScroll(
+                    scrollableState = homeListState,
+                    orientation = Orientation.Vertical,
+                    isReducedMotion = isReducedMotion,
                   )
-
-                  Column(
-                    modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(top = 64.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                  ) {
-                    FannedHeroCarousel(
-                      items = heroItems,
-                      pagerState = pagerState,
-                      onItemClick = onItemClick,
-                      cardWidth = 198.dp,
-                      overlapFactor = 38f,
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Box(
-                      modifier = Modifier.fillMaxWidth().heightIn(min = 138.dp),
-                      contentAlignment = Alignment.TopCenter,
-                    ) {
-                      Crossfade(
-                        targetState = activeHero,
-                        animationSpec = tween(durationMillis = 320),
-                        label = "mobile_hero_meta",
-                      ) { hero ->
-                        hero?.let {
-                          Column(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                          ) {
-                            val yearType =
-                              listOfNotNull(it.year, it.typeLabel).joinToString("  •  ")
-                            if (yearType.isNotBlank()) {
-                              Text(
-                                text = yearType,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = TextSecondary,
-                              )
-                            }
-                            Text(
-                              text = it.title,
-                              style = MaterialTheme.typography.headlineMedium,
-                              color = TextPrimary,
-                              textAlign = TextAlign.Center,
-                              maxLines = 2,
-                              overflow = TextOverflow.Ellipsis,
-                            )
-                            it.rating?.let { r ->
-                              Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                              ) {
-                                StarRatingPill(rating = r)
-                              }
-                            }
-                            if (it.overview.isNotBlank()) {
-                              Text(
-                                text = it.overview,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary,
-                                textAlign = TextAlign.Center,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 8.dp),
-                              )
-                            }
-                          }
-                        }
-                      }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    CarouselDotIndicator(
-                      count = heroItems.size,
-                      currentIndex = pagerState.currentPage % heroItems.size,
-                    )
-                  }
+                  .testTag("mobile_home_feed"),
+              contentPadding = PaddingValues(bottom = bottomBarClearance),
+              verticalArrangement = Arrangement.Top,
+            ) {
+              // 1. Bidirectional Hero Fanned Carousel with scrolling ambient backdrop so header stays transparent
+              if (heroItems.isNotEmpty()) {
+                item(key = "mobile_hero_carousel", contentType = "hero") {
+                  MobileHeroSection(
+                    heroItems = heroItems,
+                    pagerState = pagerState,
+                    onItemClick = onItemClick,
+                  )
+                }
+              } else {
+                item(key = "mobile_header_spacer", contentType = "spacer") {
+                  Spacer(modifier = Modifier.statusBarsPadding().height(64.dp))
                 }
               }
-            } else {
-              item(key = "mobile_header_spacer") {
-                Spacer(modifier = Modifier.statusBarsPadding().height(64.dp))
+
+              // 2. Explore by Language (9 sliding 2:1 banner cards)
+              item(key = "mobile_language_cards", contentType = "language_rail") {
+                LanguageCardsRail(
+                  formFactor = DeviceFormFactor.MOBILE,
+                  listState = languageRowState,
+                  horizontalPadding = 16.dp,
+                  itemSpacing = 6.dp,
+                  sectionSpacing = 12.dp,
+                  isReducedMotion = isReducedMotion,
+                  testTagPrefix = "mobile_languages",
+                  modifier = Modifier.padding(top = 26.dp),
+                  onCardClick = { card ->
+                    onSelectLanguageFilter(card.latestFilter)
+                    scope.launch {
+                      if (isReducedMotion) {
+                        homeListState.scrollToItem(2)
+                      } else {
+                        homeListState.animateScrollToItem(2)
+                      }
+                    }
+                  },
+                )
               }
-            }
 
-            // 2. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items on homepage)
-            if (homepageLatest.isNotEmpty()) {
-              item(key = "mobile_latest_combined", contentType = "latest_combined") {
-                val isGrid = AnimeSectionTab.LATEST in uiState.gridModeTabs
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                  SectionHeaderRow(
-                    title = stringResource(R.string.section_latest_combined),
-                    kicker = stringResource(R.string.section_latest_combined_sub),
-                    itemCount = homepageLatest.size,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                  )
-                  LatestControlsBar(
-                    selectedFilter = uiState.latestLanguageFilter,
-                    onSelectFilter = onSelectLanguageFilter,
-                    onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
-                    isGridMode = isGrid,
-                    onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                  )
-
-                  Crossfade(
-                    targetState = isGrid,
-                    animationSpec = tween(durationMillis = 140),
-                    label = "mobile_latest_mode",
-                  ) { gridMode ->
-                    if (gridMode) {
-                      MobileSectionInlineGrid(
-                        items = homepageLatest,
-                        savedIds = uiState.savedIds,
-                        showRank = false,
-                        onItemClick = onItemClick,
-                        onToggleSave = onToggleSave,
+              // 3. Latest Episodes & Releases (HIN/TAM/TEL default, max 12 items on homepage)
+              if (homepageLatest.isNotEmpty()) {
+                val isGrid = AnimeSectionTab.LATEST in controls.gridModeTabs
+                if (isGrid) {
+                  item(key = "mobile_latest_header", contentType = "section_header") {
+                    Column(
+                      modifier = Modifier.padding(top = 26.dp),
+                      verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                      SectionHeaderRow(
+                        title = stringResource(R.string.section_latest_combined),
+                        kicker = stringResource(R.string.section_latest_combined_sub),
+                        itemCount = homepageLatest.size,
+                        modifier = Modifier.padding(horizontal = 16.dp),
                       )
-                    } else {
+                      LatestControlsBar(
+                        selectedFilter = controls.latestLanguageFilter,
+                        onSelectFilter = onSelectLanguageFilter,
+                        onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
+                        isGridMode = true,
+                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                      )
+                    }
+                  }
+                  inlinePosterGridRows(
+                    sectionKey = "mobile_latest",
+                    items = homepageLatest,
+                    columns = inlineGridColumns,
+                    cardWidth = 158.dp,
+                    itemSpacing = 12.dp,
+                    horizontalPadding = 16.dp,
+                    firstRowTopPadding = 12.dp,
+                    rowKeyPrefix = { it.uid },
+                  ) { _, item, cellModifier ->
+                    AnimePosterCard(
+                      item = item,
+                      onClick = { onItemClick(item) },
+                      width = null,
+                      isSaved = item.id in controls.savedIds,
+                      onToggleSave = { onToggleSave(item) },
+                      showActionFooter = true,
+                      modifier = cellModifier,
+                    )
+                  }
+                } else {
+                  item(key = "mobile_latest_combined", contentType = "latest_combined") {
+                    Column(
+                      modifier = Modifier.padding(top = 26.dp),
+                      verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                      SectionHeaderRow(
+                        title = stringResource(R.string.section_latest_combined),
+                        kicker = stringResource(R.string.section_latest_combined_sub),
+                        itemCount = homepageLatest.size,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                      )
+                      LatestControlsBar(
+                        selectedFilter = controls.latestLanguageFilter,
+                        onSelectFilter = onSelectLanguageFilter,
+                        onSeeAll = { onSelectTab(AnimeSectionTab.LATEST) },
+                        isGridMode = false,
+                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.LATEST, it) },
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                      )
                       LazyRow(
                         state = latestRowState,
                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -326,7 +317,7 @@ fun MobileHomeScreen(
                             item = item,
                             onClick = { onItemClick(item) },
                             width = 158.dp,
-                            isSaved = item.id in uiState.savedIds,
+                            isSaved = item.id in controls.savedIds,
                             onToggleSave = { onToggleSave(item) },
                             showActionFooter = true,
                           )
@@ -336,36 +327,58 @@ fun MobileHomeScreen(
                   }
                 }
               }
-            }
 
-            // 3. Childhood Shows (max 12 items on homepage)
-            if (homepageChildhood.isNotEmpty()) {
-              item(key = "mobile_childhood_section", contentType = "rail") {
-                val isGrid = AnimeSectionTab.CHILDHOOD in uiState.gridModeTabs
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                  SectionHeaderRow(
-                    title = stringResource(R.string.section_childhood_shows),
-                    kicker = stringResource(R.string.section_childhood_shows_sub),
-                    itemCount = homepageChildhood.size,
-                    onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
-                    isGridMode = isGrid,
-                    onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                  )
-                  Crossfade(
-                    targetState = isGrid,
-                    animationSpec = tween(durationMillis = 140),
-                    label = "mobile_childhood_mode",
-                  ) { gridMode ->
-                    if (gridMode) {
-                      MobileSectionInlineGrid(
-                        items = homepageChildhood,
-                        savedIds = uiState.savedIds,
-                        showRank = true,
-                        onItemClick = onItemClick,
-                        onToggleSave = onToggleSave,
+              // 4. Childhood Shows (max 12 items on homepage)
+              if (homepageChildhood.isNotEmpty()) {
+                val isGrid = AnimeSectionTab.CHILDHOOD in controls.gridModeTabs
+                if (isGrid) {
+                  item(key = "mobile_childhood_header", contentType = "section_header") {
+                    SectionHeaderRow(
+                      title = stringResource(R.string.section_childhood_shows),
+                      kicker = stringResource(R.string.section_childhood_shows_sub),
+                      itemCount = homepageChildhood.size,
+                      onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
+                      isGridMode = true,
+                      onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
+                      modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 26.dp),
+                    )
+                  }
+                  inlinePosterGridRows(
+                    sectionKey = "mobile_childhood",
+                    items = homepageChildhood,
+                    columns = inlineGridColumns,
+                    cardWidth = 158.dp,
+                    itemSpacing = 12.dp,
+                    horizontalPadding = 16.dp,
+                    firstRowTopPadding = 12.dp,
+                    rowKeyPrefix = { it.uid },
+                  ) { flatIndex, item, cellModifier ->
+                    AnimePosterCard(
+                      item = item,
+                      onClick = { onItemClick(item) },
+                      width = null,
+                      isSaved = item.id in controls.savedIds,
+                      onToggleSave = { onToggleSave(item) },
+                      rankBadge = flatIndex + 1,
+                      showActionFooter = true,
+                      modifier = cellModifier,
+                    )
+                  }
+                } else {
+                  item(key = "mobile_childhood_section", contentType = "rail") {
+                    Column(
+                      modifier = Modifier.padding(top = 26.dp),
+                      verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                      SectionHeaderRow(
+                        title = stringResource(R.string.section_childhood_shows),
+                        kicker = stringResource(R.string.section_childhood_shows_sub),
+                        itemCount = homepageChildhood.size,
+                        onSeeAll = { onSelectTab(AnimeSectionTab.CHILDHOOD) },
+                        isGridMode = false,
+                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.CHILDHOOD, it) },
+                        modifier = Modifier.padding(horizontal = 16.dp),
                       )
-                    } else {
                       LazyRow(
                         state = childhoodRowState,
                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -386,7 +399,7 @@ fun MobileHomeScreen(
                             item = item,
                             onClick = { onItemClick(item) },
                             width = 158.dp,
-                            isSaved = item.id in uiState.savedIds,
+                            isSaved = item.id in controls.savedIds,
                             onToggleSave = { onToggleSave(item) },
                             rankBadge = index + 1,
                             showActionFooter = true,
@@ -397,36 +410,57 @@ fun MobileHomeScreen(
                   }
                 }
               }
-            }
 
-            // 4. Most Popular TV Series (max 12 items on homepage)
-            if (homepageSeries.isNotEmpty()) {
-              item(key = "mobile_series_section", contentType = "rail") {
-                val isGrid = AnimeSectionTab.SERIES in uiState.gridModeTabs
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                  SectionHeaderRow(
-                    title = stringResource(R.string.section_popular_series),
-                    kicker = stringResource(R.string.section_popular_series_sub),
-                    itemCount = homepageSeries.size,
-                    onSeeAll = { onSelectTab(AnimeSectionTab.SERIES) },
-                    isGridMode = isGrid,
-                    onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.SERIES, it) },
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                  )
-                  Crossfade(
-                    targetState = isGrid,
-                    animationSpec = tween(durationMillis = 140),
-                    label = "mobile_series_mode",
-                  ) { gridMode ->
-                    if (gridMode) {
-                      MobileSectionInlineGrid(
-                        items = homepageSeries,
-                        savedIds = uiState.savedIds,
-                        showRank = false,
-                        onItemClick = onItemClick,
-                        onToggleSave = onToggleSave,
+              // 5. Most Popular TV Series (max 12 items on homepage)
+              if (homepageSeries.isNotEmpty()) {
+                val isGrid = AnimeSectionTab.SERIES in controls.gridModeTabs
+                if (isGrid) {
+                  item(key = "mobile_series_header", contentType = "section_header") {
+                    SectionHeaderRow(
+                      title = stringResource(R.string.section_popular_series),
+                      kicker = stringResource(R.string.section_popular_series_sub),
+                      itemCount = homepageSeries.size,
+                      onSeeAll = { onSelectTab(AnimeSectionTab.SERIES) },
+                      isGridMode = true,
+                      onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.SERIES, it) },
+                      modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 26.dp),
+                    )
+                  }
+                  inlinePosterGridRows(
+                    sectionKey = "mobile_series",
+                    items = homepageSeries,
+                    columns = inlineGridColumns,
+                    cardWidth = 158.dp,
+                    itemSpacing = 12.dp,
+                    horizontalPadding = 16.dp,
+                    firstRowTopPadding = 12.dp,
+                    rowKeyPrefix = { it.uid },
+                  ) { _, item, cellModifier ->
+                    AnimePosterCard(
+                      item = item,
+                      onClick = { onItemClick(item) },
+                      width = null,
+                      isSaved = item.id in controls.savedIds,
+                      onToggleSave = { onToggleSave(item) },
+                      showActionFooter = true,
+                      modifier = cellModifier,
+                    )
+                  }
+                } else {
+                  item(key = "mobile_series_section", contentType = "rail") {
+                    Column(
+                      modifier = Modifier.padding(top = 26.dp),
+                      verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                      SectionHeaderRow(
+                        title = stringResource(R.string.section_popular_series),
+                        kicker = stringResource(R.string.section_popular_series_sub),
+                        itemCount = homepageSeries.size,
+                        onSeeAll = { onSelectTab(AnimeSectionTab.SERIES) },
+                        isGridMode = false,
+                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.SERIES, it) },
+                        modifier = Modifier.padding(horizontal = 16.dp),
                       )
-                    } else {
                       LazyRow(
                         state = seriesRowState,
                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -447,7 +481,7 @@ fun MobileHomeScreen(
                             item = item,
                             onClick = { onItemClick(item) },
                             width = 158.dp,
-                            isSaved = item.id in uiState.savedIds,
+                            isSaved = item.id in controls.savedIds,
                             onToggleSave = { onToggleSave(item) },
                             showActionFooter = true,
                           )
@@ -457,36 +491,57 @@ fun MobileHomeScreen(
                   }
                 }
               }
-            }
 
-            // 5. Blockbuster Anime Movies (max 12 items on homepage)
-            if (homepageMovies.isNotEmpty()) {
-              item(key = "mobile_movies_section", contentType = "rail") {
-                val isGrid = AnimeSectionTab.MOVIES in uiState.gridModeTabs
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                  SectionHeaderRow(
-                    title = stringResource(R.string.section_popular_movies),
-                    kicker = stringResource(R.string.section_popular_movies_sub),
-                    itemCount = homepageMovies.size,
-                    onSeeAll = { onSelectTab(AnimeSectionTab.MOVIES) },
-                    isGridMode = isGrid,
-                    onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.MOVIES, it) },
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                  )
-                  Crossfade(
-                    targetState = isGrid,
-                    animationSpec = tween(durationMillis = 140),
-                    label = "mobile_movies_mode",
-                  ) { gridMode ->
-                    if (gridMode) {
-                      MobileSectionInlineGrid(
-                        items = homepageMovies,
-                        savedIds = uiState.savedIds,
-                        showRank = false,
-                        onItemClick = onItemClick,
-                        onToggleSave = onToggleSave,
+              // 6. Blockbuster Anime Movies (max 12 items on homepage)
+              if (homepageMovies.isNotEmpty()) {
+                val isGrid = AnimeSectionTab.MOVIES in controls.gridModeTabs
+                if (isGrid) {
+                  item(key = "mobile_movies_header", contentType = "section_header") {
+                    SectionHeaderRow(
+                      title = stringResource(R.string.section_popular_movies),
+                      kicker = stringResource(R.string.section_popular_movies_sub),
+                      itemCount = homepageMovies.size,
+                      onSeeAll = { onSelectTab(AnimeSectionTab.MOVIES) },
+                      isGridMode = true,
+                      onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.MOVIES, it) },
+                      modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 26.dp),
+                    )
+                  }
+                  inlinePosterGridRows(
+                    sectionKey = "mobile_movies",
+                    items = homepageMovies,
+                    columns = inlineGridColumns,
+                    cardWidth = 158.dp,
+                    itemSpacing = 12.dp,
+                    horizontalPadding = 16.dp,
+                    firstRowTopPadding = 12.dp,
+                    rowKeyPrefix = { it.uid },
+                  ) { _, item, cellModifier ->
+                    AnimePosterCard(
+                      item = item,
+                      onClick = { onItemClick(item) },
+                      width = null,
+                      isSaved = item.id in controls.savedIds,
+                      onToggleSave = { onToggleSave(item) },
+                      showActionFooter = true,
+                      modifier = cellModifier,
+                    )
+                  }
+                } else {
+                  item(key = "mobile_movies_section", contentType = "rail") {
+                    Column(
+                      modifier = Modifier.padding(top = 26.dp),
+                      verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                      SectionHeaderRow(
+                        title = stringResource(R.string.section_popular_movies),
+                        kicker = stringResource(R.string.section_popular_movies_sub),
+                        itemCount = homepageMovies.size,
+                        onSeeAll = { onSelectTab(AnimeSectionTab.MOVIES) },
+                        isGridMode = false,
+                        onToggleGridMode = { onToggleSectionGrid(AnimeSectionTab.MOVIES, it) },
+                        modifier = Modifier.padding(horizontal = 16.dp),
                       )
-                    } else {
                       LazyRow(
                         state = moviesRowState,
                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -507,7 +562,7 @@ fun MobileHomeScreen(
                             item = item,
                             onClick = { onItemClick(item) },
                             width = 158.dp,
-                            isSaved = item.id in uiState.savedIds,
+                            isSaved = item.id in controls.savedIds,
                             onToggleSave = { onToggleSave(item) },
                             showActionFooter = true,
                           )
@@ -523,9 +578,9 @@ fun MobileHomeScreen(
       } else if (tab == AnimeSectionTab.PROFILE) {
         ToonPlayProfileView(
           feed = feed,
-          savedItems = uiState.savedItems,
-          savedIds = uiState.savedIds,
-          selectedLanguageFilter = uiState.latestLanguageFilter,
+          savedItems = controls.savedItems,
+          savedIds = controls.savedIds,
+          selectedLanguageFilter = controls.latestLanguageFilter,
           onSelectLanguageFilter = onSelectLanguageFilter,
           onItemClick = onItemClick,
           onToggleSave = onToggleSave,
@@ -549,7 +604,7 @@ fun MobileHomeScreen(
             AnimeSectionTab.MOVIES ->
               stringResource(R.string.section_popular_movies) to feed.popularMovies
             AnimeSectionTab.SAVED ->
-              stringResource(R.string.section_saved) to uiState.savedItems
+              stringResource(R.string.section_saved) to controls.savedItems
             AnimeSectionTab.HOME,
             AnimeSectionTab.PROFILE -> "" to emptyList()
           }
@@ -561,7 +616,7 @@ fun MobileHomeScreen(
           )
           AnimePosterGrid(
             items = items,
-            savedIds = uiState.savedIds,
+            savedIds = controls.savedIds,
             onItemClick = onItemClick,
             onToggleSave = onToggleSave,
             minCellWidth = 158.dp,
@@ -587,9 +642,9 @@ fun MobileHomeScreen(
     )
 
     MobileFloatingBottomBar(
-      selectedTab = uiState.selectedTab,
+      selectedTab = controls.selectedTab,
       onSelectTab = { selected ->
-        if (selected == AnimeSectionTab.HOME && uiState.selectedTab == AnimeSectionTab.HOME) {
+        if (selected == AnimeSectionTab.HOME && controls.selectedTab == AnimeSectionTab.HOME) {
           scope.launch {
             if (isReducedMotion) {
               homeListState.scrollToItem(0)
@@ -603,47 +658,100 @@ fun MobileHomeScreen(
       },
       modifier = Modifier.align(Alignment.BottomCenter),
     )
-
-    if (uiState.isSearchActive) {
-      FullScreenSearchSheet(
-        query = uiState.searchQuery,
-        results = uiState.searchResults,
-        allItems = feed.allUnique,
-        savedIds = uiState.savedIds,
-        onQueryChange = onSearchQueryChange,
-        onItemClick = onItemClick,
-        onToggleSave = onToggleSave,
-        onClose = { onToggleSearch(false) },
-      )
-    }
   }
 }
 
 @Composable
-private fun MobileSectionInlineGrid(
-  items: List<AnimeItem>,
-  savedIds: Set<String>,
-  showRank: Boolean,
+private fun MobileHeroSection(
+  heroItems: List<AnimeItem>,
+  pagerState: androidx.compose.foundation.pager.PagerState,
   onItemClick: (AnimeItem) -> Unit,
-  onToggleSave: (AnimeItem) -> Unit,
 ) {
-  ResponsiveSectionGrid(
-    items = items,
-    cardWidth = 158.dp,
-    itemSpacing = 12.dp,
-    horizontalPadding = 16.dp,
-  ) { flatIndex, item, cellModifier ->
-    val rank = if (showRank) flatIndex + 1 else null
-    AnimePosterCard(
-      item = item,
-      onClick = { onItemClick(item) },
-      width = null,
-      isSaved = item.id in savedIds,
-      onToggleSave = { onToggleSave(item) },
-      rankBadge = rank,
-      showActionFooter = true,
-      modifier = cellModifier,
+  val currentHeroIndex by remember(heroItems, pagerState) {
+    derivedStateOf { pagerState.currentPage % heroItems.size }
+  }
+  val activeHero = heroItems[currentHeroIndex]
+
+  Box(modifier = Modifier.fillMaxWidth()) {
+    AmbientHeroBackdrop(
+      imageUrl = activeHero.backdropUrl ?: activeHero.posterUrl,
+      height = 492.dp,
     )
+
+    Column(
+      modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(top = 64.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      FannedHeroCarousel(
+        items = heroItems,
+        pagerState = pagerState,
+        onItemClick = onItemClick,
+        cardWidth = 198.dp,
+        overlapFactor = 38f,
+      )
+
+      Spacer(modifier = Modifier.height(16.dp))
+
+      Box(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 138.dp),
+        contentAlignment = Alignment.TopCenter,
+      ) {
+        Crossfade(
+          targetState = activeHero,
+          animationSpec = tween(durationMillis = 320),
+          label = "mobile_hero_meta",
+        ) { hero ->
+          Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            val yearType =
+              listOfNotNull(hero.year, hero.typeLabel).joinToString("  •  ")
+            if (yearType.isNotBlank()) {
+              Text(
+                text = yearType,
+                style = MaterialTheme.typography.labelLarge,
+                color = TextSecondary,
+              )
+            }
+            Text(
+              text = hero.title,
+              style = MaterialTheme.typography.headlineMedium,
+              color = TextPrimary,
+              textAlign = TextAlign.Center,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+            )
+            hero.rating?.let { r ->
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                StarRatingPill(rating = r)
+              }
+            }
+            if (hero.overview.isNotBlank()) {
+              Text(
+                text = hero.overview,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 8.dp),
+              )
+            }
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(8.dp))
+      CarouselDotIndicator(
+        count = heroItems.size,
+        currentIndex = currentHeroIndex,
+      )
+    }
   }
 }
 

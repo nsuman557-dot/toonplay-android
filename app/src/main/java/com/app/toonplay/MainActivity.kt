@@ -9,6 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import com.app.toonplay.ui.ToonPlayRoot
 import com.app.toonplay.ui.state.HomeViewModel
+import com.app.toonplay.ui.state.SearchViewModel
 import com.app.toonplay.ui.theme.ToonPlayTheme
 
 class MainActivity : ComponentActivity() {
@@ -18,6 +19,14 @@ class MainActivity : ComponentActivity() {
     HomeViewModel.Factory(
       repository = app.homeRepository,
       preferencesRepository = app.preferencesRepository,
+      searchRepository = app.searchRepository,
+    )
+  }
+
+  private val searchViewModel: SearchViewModel by viewModels {
+    val app = application as ToonPlayApplication
+    SearchViewModel.Factory(
+      searchRepository = app.searchRepository,
     )
   }
 
@@ -29,7 +38,10 @@ class MainActivity : ComponentActivity() {
     )
     setContent {
       ToonPlayTheme {
-        ToonPlayRoot(viewModel = homeViewModel)
+        ToonPlayRoot(
+          viewModel = homeViewModel,
+          searchViewModel = searchViewModel,
+        )
       }
     }
   }
